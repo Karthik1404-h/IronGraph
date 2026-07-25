@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, Pressable } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 export default function DashboardScreen() {
   return (
@@ -14,8 +14,8 @@ export default function DashboardScreen() {
           <Text style={styles.emptyStateText}>
             No workouts yet. Be the first to log a session...
           </Text>
-          
-          <Pressable 
+
+          <Pressable
             style={({ pressed }) => pressed ? [styles.button, styles.buttonPressed] : styles.button}
           >
             <Text style={styles.buttonText}>Start Workout</Text>
@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   button: {
-    backgroundColor: '#39FF14',
+    color: '#2c1f65ff',
     paddingVertical: 16,
     paddingHorizontal: 32,
     borderRadius: 100, // Pill shape
@@ -79,7 +79,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   buttonText: {
-    color: '#000000',
+    color: '#f9f9fbff',
     fontSize: 18,
     fontWeight: 'bold',
   },

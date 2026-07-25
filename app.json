@@ -45,6 +45,12 @@
         "projectId": "f90488b0-118d-461d-aa1e-fa141bb3ee15"
       }
     },
-    "owner": "camel_1404"
+    "owner": "camel1404s-team",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f90488b0-118d-461d-aa1e-fa141bb3ee15"
+    }
   }
 }

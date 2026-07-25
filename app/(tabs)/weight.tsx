@@ -1,8 +1,19 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { StyleSheet, Text, View, TextInput, Pressable, FlatList, Alert, ActivityIndicator, Dimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
+import { supabase } from '../../lib/supabase';
+
+// Rounds val up to the nearest "nice" scale value (1, 2, 5, 10, 20, 50 …)
+function niceNum(val: number): number {
+  if (val <= 0) return 1;
+  const exp = Math.floor(Math.log10(val));
+  const f = val / Math.pow(10, exp);
+  if (f <= 1) return Math.pow(10, exp);
+  if (f <= 2) return 2 * Math.pow(10, exp);
+  if (f <= 5) return 5 * Math.pow(10, exp);
+  return 10 * Math.pow(10, exp);
+}
 
 // --- MOCK DATA TOGGLE ---
 const USE_MOCK_DATA = false; // Set to false to use your real Supabase data
@@ -26,7 +37,7 @@ function generateMockData(): WeightLog[] {
     currentWeight = currentWeight + (Math.random() * 0.6 - 0.3);
     if (currentWeight > 115) currentWeight = 115;
     if (currentWeight < 110) currentWeight = 110;
-    
+
     mock.push({
       id: `mock-${i}`,
       weight: parseFloat(currentWeight.toFixed(1)),
@@ -77,7 +88,7 @@ export default function WeightScreen() {
       if (error) {
         throw error;
       }
-      
+
       setRealLogs(data || []);
     } catch (error: any) {
       console.error('Error fetching logs:', error.message);
@@ -101,7 +112,7 @@ export default function WeightScreen() {
     setIsSubmitting(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      
+
       if (!user) {
         Alert.alert('Authentication Error', 'You must be logged in to log weight.');
         return;
@@ -129,8 +140,8 @@ export default function WeightScreen() {
 
   const handleDeleteLog = async (id: string) => {
     if (USE_MOCK_DATA) {
-        Alert.alert("Notice", "Cannot delete mock data.");
-        return;
+      Alert.alert("Notice", "Cannot delete mock data.");
+      return;
     }
 
     Alert.alert(
@@ -138,8 +149,8 @@ export default function WeightScreen() {
       "Are you sure you want to delete this weight log?",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
+        {
+          text: "Delete",
           style: "destructive",
           onPress: async () => {
             try {
@@ -166,7 +177,7 @@ export default function WeightScreen() {
   const processedLogs = useMemo(() => {
     const uniqueDays = new Set();
     const result: WeightLog[] = [];
-    
+
     for (const log of activeLogs) {
       const dateStr = new Date(log.logged_at).toISOString().split('T')[0];
       if (!uniqueDays.has(dateStr)) {
@@ -181,7 +192,7 @@ export default function WeightScreen() {
   const chartData = useMemo(() => {
     // Sort chronologically (oldest first)
     const sortedLogs = [...processedLogs].sort((a, b) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime());
-    
+
     if (sortedLogs.length === 0) return [];
 
     const now = new Date();
@@ -218,24 +229,24 @@ export default function WeightScreen() {
     const finalData = intervals.map(interval => {
       const intervalTime = interval.date.getTime();
       let closestLog = null;
-      
+
       for (let i = sortedLogs.length - 1; i >= 0; i--) {
         const logTime = new Date(sortedLogs[i].logged_at).getTime();
-        
+
         if (horizon === 'Monthly' || horizon === 'Yearly') {
-            // Find the log that happened during or before this month
-            if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
-                closestLog = sortedLogs[i];
-                break;
-            }
+          // Find the log that happened during or before this month
+          if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
+            closestLog = sortedLogs[i];
+            break;
+          }
         } else {
-            // For daily/weekly, end of the interval day
-            const endOfDay = new Date(intervalTime);
-            endOfDay.setHours(23, 59, 59, 999);
-            if (logTime <= endOfDay.getTime()) {
-                closestLog = sortedLogs[i];
-                break;
-            }
+          // For daily/weekly, end of the interval day
+          const endOfDay = new Date(intervalTime);
+          endOfDay.setHours(23, 59, 59, 999);
+          if (logTime <= endOfDay.getTime()) {
+            closestLog = sortedLogs[i];
+            break;
+          }
         }
       }
 
@@ -253,32 +264,43 @@ export default function WeightScreen() {
     return finalData;
   }, [processedLogs, horizon]);
 
-  // Calculate dynamic Y-Axis constraints to "zoom in" on the data correctly
+  // Y-Axis: snaps to "nice" step boundaries with 1 step of breathing room above & below
   const yAxisConfig = useMemo(() => {
-    if (chartData.length === 0) return { min: 0, range: 100, step: 20 };
-    const values = chartData.map(d => d.value);
-    const minVal = Math.min(...values);
-    const maxVal = Math.max(...values);
-    
-    // Create a 5kg padding above and below the min/max values
-    const minPadding = Math.max(0, Math.floor(minVal) - 5);
-    const maxPadding = Math.ceil(maxVal) + 5;
-    
-    // Maximum Range: Total height of the chart (max - offset)
-    const range = maxPadding - minPadding;
-    
-    // Ensure we have at least some steps on the Y axis
-    const step = Math.max(1, Math.ceil(range / 5));
+    const fallback = { min: 60, max: 100, range: 40, step: 10, noOfSections: 4 };
+    if (chartData.length === 0) return fallback;
+    const values = chartData.map(d => d.value).filter(v => isFinite(v));
+    if (values.length === 0) return fallback;
 
-    return { min: minPadding, range, step };
+    const rawMin = Math.min(...values);
+    const rawMax = Math.max(...values);
+    // Ensure a minimum visible range for flat data
+    const span = Math.max(rawMax - rawMin, 4);
+    // Pick a nice step targeting ~5 sections
+    const step = niceNum(span / 5);
+    // Snap outward to step boundaries, add 1 step of padding each side
+    const min = Math.max(0, Math.floor(rawMin / step) * step - step);
+    const max = Math.ceil(rawMax / step) * step + step;
+    const range = max - min;
+    const noOfSections = Math.round(range / step);
+
+    return { min, max, range, step, noOfSections };
   }, [chartData]);
+
+  const yAxisLabelTexts = useMemo(() => {
+    const labels: string[] = [];
+    for (let i = 0; i <= yAxisConfig.noOfSections; i++) {
+      const val = yAxisConfig.min + i * yAxisConfig.step;
+      labels.push(Number.isInteger(val) ? `${val}kg` : `${val.toFixed(1)}kg`);
+    }
+    return labels;
+  }, [yAxisConfig]);
 
   const renderItem = ({ item }: { item: WeightLog }) => {
     const date = new Date(item.logged_at);
     return (
       <View style={styles.logCard}>
         <View>
-          <Text style={styles.logDate}>{date.toLocaleDateString()} {date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</Text>
+          <Text style={styles.logDate}>{date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
           <Text style={styles.logWeight}>{item.weight} kg</Text>
         </View>
         <Pressable onPress={() => handleDeleteLog(item.id)} style={({ pressed }) => [
@@ -307,7 +329,7 @@ export default function WeightScreen() {
               <Text style={styles.mockBannerText}>USING MOCK DATA</Text>
             </View>
           )}
-          
+
           {/* Chart Section */}
           <View style={styles.chartCard}>
             <View style={styles.horizonSwitcher}>
@@ -327,26 +349,28 @@ export default function WeightScreen() {
             {chartData.length > 0 ? (
               <View style={styles.chartWrapper}>
                 <LineChart
-                  data={chartData}
+                  data={chartData.map(d => ({ ...d, value: Math.max(0, d.value - yAxisConfig.min) }))}
                   color="#39FF14"
                   thickness={3}
                   dataPointsColor="#FFFFFF"
                   textColor="#A0A0A0"
                   xAxisColor="#333333"
                   yAxisColor="#333333"
-                  yAxisTextStyle={{ color: '#A0A0A0', fontSize: 12 }}
-                  xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                  yAxisTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                  xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10, textAlign: 'center' }}
                   rulesColor="#1A1A1A"
                   hideRules
-                  width={Dimensions.get('window').width - 100}
+                  width={Dimensions.get('window').width - 138}
                   height={180}
                   isAnimated
-                  yAxisOffset={yAxisConfig.min}
+                  noOfSections={yAxisConfig.noOfSections}
                   maxValue={yAxisConfig.range}
                   stepValue={yAxisConfig.step}
-                  noOfSections={5}
-                  yAxisLabelSuffix="kg"
-                  yAxisLabelWidth={40}
+                  yAxisLabelTexts={yAxisLabelTexts}
+                  yAxisLabelWidth={50}
+                  spacing={(Dimensions.get('window').width - 178) / Math.max(1, chartData.length - 1)}
+                  initialSpacing={20}
+                  endSpacing={20}
                 />
               </View>
             ) : (
@@ -366,8 +390,8 @@ export default function WeightScreen() {
               value={weightInput}
               onChangeText={setWeightInput}
             />
-            
-            <Pressable 
+
+            <Pressable
               style={({ pressed }) => (pressed || isSubmitting) ? [styles.button, styles.buttonPressed] : styles.button}
               onPress={handleLogWeight}
               disabled={isSubmitting}
@@ -449,7 +473,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   horizonPillActive: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#00FFFF',
   },
   horizonText: {
     color: '#A0A0A0',
@@ -457,14 +481,15 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   horizonTextActive: {
-    color: '#FFFFFF',
+    color: '#000000',
     fontWeight: 'bold',
   },
   chartWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
-    paddingRight: 10, // Gives extra padding for the chart labels
+    paddingHorizontal: 4,
+    overflow: 'hidden', // Prevents x-axis labels from escaping the card
   },
   chartEmpty: {
     height: 180,
@@ -493,7 +518,7 @@ const styles = StyleSheet.create({
     borderColor: '#333333',
   },
   button: {
-    backgroundColor: '#39FF14',
+    backgroundColor: '#00FFFF',
     paddingVertical: 16,
     borderRadius: 100, // Pill shape
     alignItems: 'center',
@@ -504,7 +529,7 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   buttonText: {
-    color: '#000000',
+    color: '#f9f9fbff',
     fontSize: 18,
     fontWeight: 'bold',
   },
@@ -535,11 +560,11 @@ const styles = StyleSheet.create({
   },
   deleteButton: {
     padding: 10,
-    backgroundColor: 'rgba(255, 59, 48, 0.1)',
+    backgroundColor: '#FF3B30',
     borderRadius: 8,
   },
   deleteText: {
-    color: '#FF3B30',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
   },
