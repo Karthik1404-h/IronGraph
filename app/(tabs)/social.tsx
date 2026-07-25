@@ -1,8 +1,19 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { StyleSheet, Text, View, Pressable, FlatList, Alert, ActivityIndicator, Dimensions, Image } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { supabase } from '../../lib/supabase';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
+import { supabase } from '../../lib/supabase';
+
+// Rounds val up to the nearest "nice" scale value (1, 2, 5, 10, 20, 50 …)
+function niceNum(val: number): number {
+  if (val <= 0) return 1;
+  const exp = Math.floor(Math.log10(val));
+  const f = val / Math.pow(10, exp);
+  if (f <= 1) return Math.pow(10, exp);
+  if (f <= 2) return 2 * Math.pow(10, exp);
+  if (f <= 5) return 5 * Math.pow(10, exp);
+  return 10 * Math.pow(10, exp);
+}
 
 type Profile = {
   id: string;
@@ -85,7 +96,7 @@ export default function SocialScreen() {
         .from('friendships')
         .select('*')
         .or(`user_id.eq.${user.id},friend_id.eq.${user.id}`);
-        
+
       if (fErr) throw fErr;
       if (!isMounted()) return;
 
@@ -177,7 +188,7 @@ export default function SocialScreen() {
 
           const sevenDaysAgo = new Date();
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-          
+
           let pastLog = null;
           for (const log of processed) {
             const logDate = new Date(log.logged_at);
@@ -188,7 +199,7 @@ export default function SocialScreen() {
           }
 
           if (!pastLog && processed.length > 1) {
-             pastLog = processed[processed.length - 1];
+            pastLog = processed[processed.length - 1];
           }
 
           if (pastLog) {
@@ -242,9 +253,9 @@ export default function SocialScreen() {
 
       if (insertError) {
         if (insertError.code === '23505') {
-           Alert.alert("Info", "A request already exists between you two.");
+          Alert.alert("Info", "A request already exists between you two.");
         } else {
-           throw insertError;
+          throw insertError;
         }
       }
       fetchData(); // Refresh UI instantly
@@ -325,13 +336,13 @@ export default function SocialScreen() {
           )}
           <Text style={styles.globalUserName}>{displayName}</Text>
         </View>
-        
+
         {item.friendshipStatus === 'friends' && (
           <View style={styles.statusBadgeFriends}>
             <Text style={styles.statusTextFriends}>Friends</Text>
           </View>
         )}
-        
+
         {item.friendshipStatus === 'pending_outgoing' && (
           <View style={styles.statusBadgePending}>
             <Text style={styles.statusTextPending}>Pending</Text>
@@ -345,11 +356,14 @@ export default function SocialScreen() {
         )}
 
         {item.friendshipStatus === 'none' && (
-          <Pressable 
-            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+          <Pressable
             onPress={() => sendFriendRequest(item.id)}
           >
-            <Text style={styles.addBtnText}>Add</Text>
+            {({ pressed }) => (
+              <View style={[styles.addBtn, pressed && { opacity: 0.7 }]}>
+                <Text style={styles.addBtnText}>Add</Text>
+              </View>
+            )}
           </Pressable>
         )}
       </View>
@@ -409,21 +423,21 @@ export default function SocialScreen() {
     return intervals.map(interval => {
       const intervalTime = interval.date.getTime();
       let closestLog = null;
-      
+
       for (let i = sortedLogs.length - 1; i >= 0; i--) {
         const logTime = new Date(sortedLogs[i].logged_at).getTime();
         if (horizon === 'Monthly' || horizon === 'Yearly') {
-            if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
-                closestLog = sortedLogs[i];
-                break;
-            }
+          if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
+            closestLog = sortedLogs[i];
+            break;
+          }
         } else {
-            const endOfDay = new Date(intervalTime);
-            endOfDay.setHours(23, 59, 59, 999);
-            if (logTime <= endOfDay.getTime()) {
-                closestLog = sortedLogs[i];
-                break;
-            }
+          const endOfDay = new Date(intervalTime);
+          endOfDay.setHours(23, 59, 59, 999);
+          if (logTime <= endOfDay.getTime()) {
+            closestLog = sortedLogs[i];
+            break;
+          }
         }
       }
 
@@ -446,25 +460,38 @@ export default function SocialScreen() {
     return processLogsForChart(topFriend.id);
   }, [allLogs, topFriend, horizon]);
 
+  // Y-Axis: combines both datasets, snaps to nice step boundaries with 1 step of breathing room
   const yAxisConfig = useMemo(() => {
-    if (chartDataMy.length === 0 && chartDataFriend.length === 0) return { min: 0, range: 100, step: 20 };
-    
-    const vals1 = chartDataMy.map(d => d.value);
-    const vals2 = chartDataFriend.map(d => d.value);
-    const allVals = [...vals1, ...vals2];
-    
-    if (allVals.length === 0) return { min: 0, range: 100, step: 20 };
+    const fallback = { min: 60, max: 100, range: 40, step: 10, noOfSections: 4 };
+    if (chartDataMy.length === 0 && chartDataFriend.length === 0) return fallback;
 
-    const minVal = Math.min(...allVals);
-    const maxVal = Math.max(...allVals);
-    
-    const minPadding = Math.max(0, Math.floor(minVal) - 5);
-    const maxPadding = Math.ceil(maxVal) + 5;
-    const range = maxPadding - minPadding;
-    const step = Math.max(1, Math.ceil(range / 5));
+    const allVals = [
+      ...chartDataMy.map(d => d.value),
+      ...chartDataFriend.map(d => d.value),
+    ].filter(v => isFinite(v));
 
-    return { min: minPadding, range, step };
+    if (allVals.length === 0) return fallback;
+
+    const rawMin = Math.min(...allVals);
+    const rawMax = Math.max(...allVals);
+    const span = Math.max(rawMax - rawMin, 4);
+    const step = niceNum(span / 5);
+    const min = Math.max(0, Math.floor(rawMin / step) * step - step);
+    const max = Math.ceil(rawMax / step) * step + step;
+    const range = max - min;
+    const noOfSections = Math.round(range / step);
+
+    return { min, max, range, step, noOfSections };
   }, [chartDataMy, chartDataFriend]);
+
+  const yAxisLabelTexts = useMemo(() => {
+    const labels: string[] = [];
+    for (let i = 0; i <= yAxisConfig.noOfSections; i++) {
+      const val = yAxisConfig.min + i * yAxisConfig.step;
+      labels.push(Number.isInteger(val) ? `${val}kg` : `${val.toFixed(1)}kg`);
+    }
+    return labels;
+  }, [yAxisConfig]);
 
   return (
     <View style={styles.container}>
@@ -514,11 +541,11 @@ export default function SocialScreen() {
             {/* Comparison Chart */}
             <View style={[styles.card, { marginTop: 24, padding: 16 }]}>
               <Text style={styles.sectionTitle}>Head-to-Head Progress</Text>
-              
+
               {!topFriend ? (
-                 <Text style={[styles.emptyText, { marginBottom: 20 }]}>Add friends to unlock the comparison chart.</Text>
+                <Text style={[styles.emptyText, { marginBottom: 20 }]}>Add friends to unlock the comparison chart.</Text>
               ) : (
-                 <>
+                <>
                   <View style={styles.chartLegendRow}>
                     <View style={styles.legendItem}>
                       <View style={[styles.legendDot, { backgroundColor: '#39FF14' }]} />
@@ -546,8 +573,8 @@ export default function SocialScreen() {
 
                   <View style={styles.chartWrapper}>
                     <LineChart
-                      data={chartDataMy}
-                      data2={chartDataFriend}
+                      data={chartDataMy.map(d => ({ ...d, value: Math.max(0, d.value - yAxisConfig.min) }))}
+                      data2={chartDataFriend.map(d => ({ ...d, value: Math.max(0, d.value - yAxisConfig.min) }))}
                       color1="#39FF14"
                       color2="#00FFFF"
                       thickness={3}
@@ -556,28 +583,30 @@ export default function SocialScreen() {
                       textColor="#A0A0A0"
                       xAxisColor="#333333"
                       yAxisColor="#333333"
-                      yAxisTextStyle={{ color: '#A0A0A0', fontSize: 12 }}
-                      xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                      yAxisTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                      xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10, textAlign: 'center' }}
                       rulesColor="#1A1A1A"
                       hideRules
-                      width={Dimensions.get('window').width - 100}
+                      width={Dimensions.get('window').width - 138}
                       height={180}
                       isAnimated
-                      yAxisOffset={yAxisConfig.min}
+                      noOfSections={yAxisConfig.noOfSections}
                       maxValue={yAxisConfig.range}
                       stepValue={yAxisConfig.step}
-                      noOfSections={5}
-                      yAxisLabelSuffix="kg"
-                      yAxisLabelWidth={40}
+                      yAxisLabelTexts={yAxisLabelTexts}
+                      yAxisLabelWidth={50}
+                      spacing={(Dimensions.get('window').width - 178) / Math.max(1, chartDataMy.length - 1)}
+                      initialSpacing={20}
+                      endSpacing={20}
                     />
                   </View>
-                 </>
+                </>
               )}
             </View>
 
             <Text style={[styles.sectionTitle, { marginTop: 40 }]}>Global Users</Text>
             {isLoading && globalUsers.length === 0 ? (
-               <ActivityIndicator color="#39FF14" />
+              <ActivityIndicator color="#39FF14" />
             ) : (
                globalUsers.filter(user => user && user.id).map(user => (
                  <React.Fragment key={user.id}>
@@ -586,7 +615,7 @@ export default function SocialScreen() {
                ))
             )}
             {globalUsers.length === 0 && !isLoading && (
-               <Text style={styles.emptyText}>No other users found.</Text>
+              <Text style={styles.emptyText}>No other users found.</Text>
             )}
           </>
         }
@@ -647,10 +676,10 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   acceptBtn: {
-    backgroundColor: '#39FF1420',
+    backgroundColor: '#00FFFF',
   },
   acceptText: {
-    color: '#39FF14',
+    color: '#000000',
     fontWeight: 'bold',
   },
   declineBtn: {
@@ -719,7 +748,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   addBtn: {
-    backgroundColor: '#39FF14',
+    backgroundColor: '#00FFFF',
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 8,
@@ -783,7 +812,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   horizonPillActive: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#00FFFF',
   },
   horizonText: {
     color: '#A0A0A0',
@@ -791,7 +820,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   horizonTextActive: {
-    color: '#FFFFFF',
+    color: '#000000',
     fontWeight: 'bold',
   },
   chartWrapper: {
