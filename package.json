@@ -16,6 +16,7 @@
     "expo-splash-screen": "~57.0.5",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.1",
+    "expo-updates": "~57.0.10",
     "expo-web-browser": "~57.0.2",
     "nativewind": "^4.2.6",
     "react": "19.2.3",

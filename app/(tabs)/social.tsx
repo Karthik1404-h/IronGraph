@@ -314,7 +314,7 @@ export default function SocialScreen() {
     if (!item || !item.id) return null;
     const displayName = item.display_name || item.email || 'Unknown User';
     return (
-      <View style={styles.globalUserCard}>
+      <View key={item.id} style={styles.globalUserCard}>
         <View style={styles.globalUserLeft}>
           {item.avatar_url ? (
             <Image source={{ uri: item.avatar_url }} style={styles.avatarSmall} />
@@ -579,7 +579,11 @@ export default function SocialScreen() {
             {isLoading && globalUsers.length === 0 ? (
                <ActivityIndicator color="#39FF14" />
             ) : (
-               globalUsers.filter(user => user && user.id).map(user => renderGlobalUser({ item: user }))
+               globalUsers.filter(user => user && user.id).map(user => (
+                 <React.Fragment key={user.id}>
+                   {renderGlobalUser({ item: user })}
+                 </React.Fragment>
+               ))
             )}
             {globalUsers.length === 0 && !isLoading && (
                <Text style={styles.emptyText}>No other users found.</Text>
