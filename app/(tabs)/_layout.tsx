@@ -49,15 +49,49 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="two"
+        name="weight"
         options={{
-          title: 'Tab Two',
+          title: 'Weight',
           tabBarIcon: ({ color }) => (
             <SymbolView
               name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
+                ios: 'scalemass',
+                android: 'add',
+                web: 'add',
+              }}
+              tintColor={color}
+              size={28}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="social"
+        options={{
+          title: 'Leaderboard',
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{
+                ios: 'person.2',
+                android: 'group',
+                web: 'group',
+              }}
+              tintColor={color}
+              size={28}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="two"
+        options={{
+          title: 'Profile',
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{
+                ios: 'person.crop.circle',
+                android: 'person',
+                web: 'person',
               }}
               tintColor={color}
               size={28}
