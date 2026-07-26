@@ -378,76 +378,49 @@ export default function SocialScreen() {
 
   const processLogsForChart = (userId: string) => {
     const rawLogs = allLogs[userId] || [];
-    const uniqueDays = new Set();
-    const processed: any[] = [];
-    for (const log of rawLogs) {
-      const dateStr = new Date(log.logged_at).toISOString().split('T')[0];
-      if (!uniqueDays.has(dateStr)) {
-        uniqueDays.add(dateStr);
-        processed.push(log);
-      }
-    }
+    if (rawLogs.length === 0) return [];
 
-    const sortedLogs = [...processed].sort((a, b) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime());
-    if (sortedLogs.length === 0) return [];
-
-    const now = new Date();
-    const intervals: { date: Date, label: string }[] = [];
+    const now = new Date().getTime();
+    let cutoffDate = 0;
 
     if (horizon === 'Daily') {
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(now.getDate() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { weekday: 'short' }) });
-      }
+      cutoffDate = now - 7 * 24 * 60 * 60 * 1000; // Last 7 days
     } else if (horizon === 'Weekly') {
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(now.getDate() - (i * 7));
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short', day: 'numeric' }) });
-      }
+      cutoffDate = now - 30 * 24 * 60 * 60 * 1000; // Last 30 days
     } else if (horizon === 'Monthly') {
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(now.getMonth() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short' }) });
-      }
+      cutoffDate = now - 180 * 24 * 60 * 60 * 1000; // Last 6 months
     } else if (horizon === 'Yearly') {
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(now.getMonth() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short' }) });
-      }
+      cutoffDate = now - 365 * 24 * 60 * 60 * 1000; // Last 12 months
     }
 
-    return intervals.map(interval => {
-      const intervalTime = interval.date.getTime();
-      let closestLog = null;
+    const filteredLogs = rawLogs
+      .filter((log: any) => new Date(log.logged_at).getTime() >= cutoffDate)
+      .sort((a: any, b: any) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime());
 
-      for (let i = sortedLogs.length - 1; i >= 0; i--) {
-        const logTime = new Date(sortedLogs[i].logged_at).getTime();
-        if (horizon === 'Monthly' || horizon === 'Yearly') {
-          if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
-            closestLog = sortedLogs[i];
-            break;
-          }
-        } else {
-          const endOfDay = new Date(intervalTime);
-          endOfDay.setHours(23, 59, 59, 999);
-          if (logTime <= endOfDay.getTime()) {
-            closestLog = sortedLogs[i];
-            break;
-          }
-        }
+    if (filteredLogs.length === 0) return [];
+
+    const formatLabel = (dateString: string) => {
+      const d = new Date(dateString);
+      if (horizon === 'Daily') {
+        return d.toLocaleDateString([], { weekday: 'short' });
+      } else {
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
       }
+    };
 
-      if (!closestLog) closestLog = sortedLogs[0];
+    const finalData = filteredLogs.map((log: any) => ({
+      value: log.weight,
+      label: formatLabel(log.logged_at),
+    }));
 
-      return {
-        value: closestLog.weight,
-        label: interval.label,
-      };
-    });
+    if (finalData.length === 1) {
+      return [
+        { value: finalData[0].value, label: 'Start' },
+        ...finalData
+      ];
+    }
+
+    return finalData;
   };
 
   const chartDataMy = useMemo(() => {

@@ -173,96 +173,54 @@ export default function WeightScreen() {
   // Determine active dataset
   const activeLogs = USE_MOCK_DATA ? MOCK_DATA : realLogs;
 
-  // Only keep the most recent log per calendar day (logs are sorted DESC by logged_at)
-  const processedLogs = useMemo(() => {
-    const uniqueDays = new Set();
-    const result: WeightLog[] = [];
-
-    for (const log of activeLogs) {
-      const dateStr = new Date(log.logged_at).toISOString().split('T')[0];
-      if (!uniqueDays.has(dateStr)) {
-        uniqueDays.add(dateStr);
-        result.push(log);
-      }
-    }
-    return result;
-  }, [activeLogs]);
-
-  // Process data for the chart with proper spatial timeline padding
+  // Process data for the chart by plotting actual logs within the selected horizon
   const chartData = useMemo(() => {
-    // Sort chronologically (oldest first)
-    const sortedLogs = [...processedLogs].sort((a, b) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime());
+    if (activeLogs.length === 0) return [];
 
-    if (sortedLogs.length === 0) return [];
+    const now = new Date().getTime();
+    let cutoffDate = 0;
 
-    const now = new Date();
-    const intervals: { date: Date, label: string }[] = [];
-
-    // Generate strict timeline intervals depending on the selected horizon
     if (horizon === 'Daily') {
-      for (let i = 6; i >= 0; i--) { // Last 7 days
-        const d = new Date();
-        d.setDate(now.getDate() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { weekday: 'short' }) });
-      }
+      cutoffDate = now - 7 * 24 * 60 * 60 * 1000; // Last 7 days
     } else if (horizon === 'Weekly') {
-      for (let i = 5; i >= 0; i--) { // Last 6 weeks
-        const d = new Date();
-        d.setDate(now.getDate() - (i * 7));
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short', day: 'numeric' }) });
-      }
+      cutoffDate = now - 30 * 24 * 60 * 60 * 1000; // Last 30 days
     } else if (horizon === 'Monthly') {
-      for (let i = 5; i >= 0; i--) { // Last 6 months
-        const d = new Date();
-        d.setMonth(now.getMonth() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short' }) });
-      }
+      cutoffDate = now - 180 * 24 * 60 * 60 * 1000; // Last 6 months
     } else if (horizon === 'Yearly') {
-      for (let i = 11; i >= 0; i--) { // Last 12 months
-        const d = new Date();
-        d.setMonth(now.getMonth() - i);
-        intervals.push({ date: d, label: d.toLocaleDateString([], { month: 'short' }) });
-      }
+      cutoffDate = now - 365 * 24 * 60 * 60 * 1000; // Last 12 months
     }
 
-    // Map each interval to a specific weight value (carry-forward last known weight)
-    const finalData = intervals.map(interval => {
-      const intervalTime = interval.date.getTime();
-      let closestLog = null;
+    // Filter logs within the cutoff and sort chronologically (oldest first)
+    const filteredLogs = activeLogs
+      .filter(log => new Date(log.logged_at).getTime() >= cutoffDate)
+      .sort((a, b) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime());
 
-      for (let i = sortedLogs.length - 1; i >= 0; i--) {
-        const logTime = new Date(sortedLogs[i].logged_at).getTime();
+    if (filteredLogs.length === 0) return [];
 
-        if (horizon === 'Monthly' || horizon === 'Yearly') {
-          // Find the log that happened during or before this month
-          if (logTime <= intervalTime || (new Date(logTime).getMonth() === interval.date.getMonth() && new Date(logTime).getFullYear() === interval.date.getFullYear())) {
-            closestLog = sortedLogs[i];
-            break;
-          }
-        } else {
-          // For daily/weekly, end of the interval day
-          const endOfDay = new Date(intervalTime);
-          endOfDay.setHours(23, 59, 59, 999);
-          if (logTime <= endOfDay.getTime()) {
-            closestLog = sortedLogs[i];
-            break;
-          }
-        }
+    const formatLabel = (dateString: string) => {
+      const d = new Date(dateString);
+      if (horizon === 'Daily') {
+        return d.toLocaleDateString([], { weekday: 'short' });
+      } else {
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
       }
+    };
 
-      // If no past log exists before this interval, use the oldest available log so it doesn't break the chart
-      if (!closestLog) {
-        closestLog = sortedLogs[0];
-      }
+    const finalData = filteredLogs.map(log => ({
+      value: log.weight,
+      label: formatLabel(log.logged_at),
+    }));
 
-      return {
-        value: closestLog.weight,
-        label: interval.label,
-      };
-    });
+    // LineChart needs at least 2 points to draw a line.
+    if (finalData.length === 1) {
+      return [
+        { value: finalData[0].value, label: 'Start' },
+        ...finalData
+      ];
+    }
 
     return finalData;
-  }, [processedLogs, horizon]);
+  }, [activeLogs, horizon]);
 
   // Y-Axis: snaps to "nice" step boundaries with 1 step of breathing room above & below
   const yAxisConfig = useMemo(() => {
@@ -317,7 +275,7 @@ export default function WeightScreen() {
     <FlatList
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
-      data={processedLogs}
+      data={activeLogs}
       keyExtractor={(item) => item.id}
       showsVerticalScrollIndicator={false}
       ListHeaderComponent={

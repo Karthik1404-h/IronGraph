@@ -170,7 +170,15 @@ export default function HomeScreen() {
 
       {/* Recent Workouts */}
       <View style={styles.recentSection}>
-        <Text style={styles.sectionTitle}>Recent Workouts</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Recent Workouts</Text>
+          <Pressable
+            style={({ pressed }) => [styles.viewAllBtn, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push('/workout-history')}
+          >
+            <Text style={styles.viewAllText}>View All ›</Text>
+          </Pressable>
+        </View>
         {isLoading ? (
           <ActivityIndicator color="#39FF14" style={{ marginTop: 20 }} />
         ) : recentWorkouts.length === 0 ? (
@@ -352,11 +360,29 @@ const styles = StyleSheet.create({
   recentSection: {
     flex: 1,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
-    marginBottom: 16,
+  },
+  viewAllBtn: {
+    backgroundColor: '#1A1A1A',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  viewAllText: {
+    fontSize: 13,
+    color: '#39FF14',
+    fontWeight: '600',
   },
   workoutCard: {
     backgroundColor: '#1A1A1A',

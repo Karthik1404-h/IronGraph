@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, Pressable, TextInput, FlatList,
-  Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform
+  Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform, BackHandler
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -52,8 +52,14 @@ export default function WorkoutScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [workoutId, setWorkoutId] = useState<string | null>(null);
+  const workoutIdRef = useRef<string | null>(null); // ref to avoid stale closure in BackHandler
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Tracks which exercise IDs have had their sets committed to the DB already
+  const [savedExercises, setSavedExercises] = useState<Set<string>>(new Set());
+  // Tracks per-exercise saving spinner
+  const [savingExerciseId, setSavingExerciseId] = useState<string | null>(null);
 
   const [summaryData, setSummaryData] = useState<{
     duration: string;
@@ -63,6 +69,7 @@ export default function WorkoutScreen() {
     newPRs: string[];
   } | null>(null);
   const [isFinished, setIsFinished] = useState(false);
+  const isFinishedRef = useRef(false); // used by BackHandler to know current finished state
 
   useEffect(() => {
     const init = async () => {
@@ -79,6 +86,26 @@ export default function WorkoutScreen() {
     };
   }, [category]);
 
+  // Keep isFinishedRef in sync with state so BackHandler always sees latest value
+  useEffect(() => {
+    isFinishedRef.current = isFinished;
+  }, [isFinished]);
+
+  // Intercept Android hardware back button
+  // — If workout is done: go home. If still active: show cancel dialog.
+  useEffect(() => {
+    const onHardwareBack = () => {
+      if (isFinishedRef.current) {
+        router.replace('/(tabs)/index');
+      } else {
+        handleCloseRef.current();
+      }
+      return true; // always prevent default
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, []);
+
   const startWorkoutSession = async (uid: string) => {
     try {
       const { data: workout, error } = await supabase
@@ -89,6 +116,7 @@ export default function WorkoutScreen() {
 
       if (error || !workout) throw error || new Error('Failed to create workout');
       setWorkoutId(workout.id);
+      workoutIdRef.current = workout.id; // keep ref in sync
 
       timerRef.current = setInterval(() => {
         setElapsedSeconds(prev => prev + 1);
@@ -146,10 +174,11 @@ export default function WorkoutScreen() {
         ? { weight: Number(bestSets[0].weight), reps: Number(bestSets[0].reps) }
         : null;
 
-      // Automatically generate 2 standard sets by default
+      // Automatically generate 3 standard sets by default
       const initialSets: SetEntry[] = [
-        { set_number: 1, weight: '', reps: '' },
-        { set_number: 2, weight: '', reps: '' }
+        { set_number: 1, weight: '0', reps: '0' },
+        { set_number: 2, weight: '0', reps: '0' },
+        { set_number: 3, weight: '0', reps: '0' },
       ];
 
       setSelectedExercises(prev => [...prev, {
@@ -195,11 +224,64 @@ export default function WorkoutScreen() {
   };
 
   const removeExerciseFromSession = (exerciseIdx: number) => {
+    const exId = selectedExercises[exerciseIdx].exercise.id;
     setSelectedExercises(prev => prev.filter((_, i) => i !== exerciseIdx));
+    // Also clear its saved state so a re-add starts fresh
+    setSavedExercises(prev => {
+      const next = new Set(prev);
+      next.delete(exId);
+      return next;
+    });
+  };
+
+  /**
+   * Save a single exercise's sets to the DB immediately.
+   * Uses delete-then-insert (upsert pattern) so re-saving is safe.
+   */
+  const saveExerciseSets = async (exIdx: number) => {
+    const se = selectedExercises[exIdx];
+    const wid = workoutIdRef.current;
+    if (!wid || !userId) return;
+
+    // Collect non-empty sets
+    const setsToSave = se.sets
+      .filter(s => (parseFloat(s.weight) || 0) > 0 || (parseInt(s.reps) || 0) > 0)
+      .map(s => ({
+        workout_id: wid,
+        exercise_id: se.exercise.id,
+        user_id: userId,
+        set_number: s.set_number,
+        weight: parseFloat(s.weight) || 0,
+        reps: parseInt(s.reps) || 0,
+      }));
+
+    if (setsToSave.length === 0) {
+      Alert.alert('No Data', 'Enter at least one weight or rep count before saving.');
+      return;
+    }
+
+    setSavingExerciseId(se.exercise.id);
+    try {
+      // Delete any previous saves for this exercise in this workout (safe re-save)
+      await supabase
+        .from('workout_sets')
+        .delete()
+        .eq('workout_id', wid)
+        .eq('exercise_id', se.exercise.id);
+
+      const { error } = await supabase.from('workout_sets').insert(setsToSave);
+      if (error) throw error;
+
+      setSavedExercises(prev => new Set([...prev, se.exercise.id]));
+    } catch (err: any) {
+      Alert.alert('Save Error', err.message || 'Failed to save sets.');
+    } finally {
+      setSavingExerciseId(null);
+    }
   };
 
   const finishWorkout = async () => {
-    if (!workoutId || !userId) return;
+    if (!workoutIdRef.current || !userId) return;
     if (selectedExercises.length === 0) {
       Alert.alert('Empty Session', 'Please add at least one exercise and log some sets.');
       return;
@@ -207,37 +289,50 @@ export default function WorkoutScreen() {
 
     setIsLoading(true);
     try {
-      const allSets: any[] = [];
-      for (const se of selectedExercises) {
-        for (const s of se.sets) {
-          const w = parseFloat(s.weight) || 0;
-          const r = parseInt(s.reps) || 0;
-          if (w > 0 || r > 0) {
-            allSets.push({
-              workout_id: workoutId,
-              exercise_id: se.exercise.id,
-              user_id: userId,
-              set_number: s.set_number,
-              weight: w,
-              reps: r,
-            });
-          }
+      const wid = workoutIdRef.current;
+
+      // Auto-save any exercises that haven't been saved yet
+      for (let i = 0; i < selectedExercises.length; i++) {
+        const se = selectedExercises[i];
+        if (savedExercises.has(se.exercise.id)) continue; // already in DB
+
+        const setsToSave = se.sets
+          .filter(s => (parseFloat(s.weight) || 0) > 0 || (parseInt(s.reps) || 0) > 0)
+          .map(s => ({
+            workout_id: wid,
+            exercise_id: se.exercise.id,
+            user_id: userId,
+            set_number: s.set_number,
+            weight: parseFloat(s.weight) || 0,
+            reps: parseInt(s.reps) || 0,
+          }));
+
+        if (setsToSave.length > 0) {
+          await supabase.from('workout_sets').delete()
+            .eq('workout_id', wid).eq('exercise_id', se.exercise.id);
+          const { error } = await supabase.from('workout_sets').insert(setsToSave);
+          if (error) throw error;
         }
       }
 
-      if (allSets.length === 0) {
-        Alert.alert('No Sets Logged', 'Please enter weight or reps for your sets before finishing.');
+      // Fetch all saved sets to build summary
+      const { data: savedSets, error: fetchErr } = await supabase
+        .from('workout_sets')
+        .select('exercise_id, weight, reps')
+        .eq('workout_id', wid);
+      if (fetchErr) throw fetchErr;
+
+      if (!savedSets || savedSets.length === 0) {
+        Alert.alert('No Sets Logged', 'Please enter weight or reps for at least one set before finishing.');
         setIsLoading(false);
         return;
       }
 
-      const { error } = await supabase.from('workout_sets').insert(allSets);
-      if (error) throw error;
-
+      // Set the workout end time
       const { error: updateErr } = await supabase
         .from('workouts')
         .update({ end_time: new Date().toISOString() })
-        .eq('id', workoutId);
+        .eq('id', wid);
       if (updateErr) throw updateErr;
 
       if (timerRef.current) clearInterval(timerRef.current);
@@ -258,41 +353,67 @@ export default function WorkoutScreen() {
         }
       }
 
-      const totalVolume = allSets.reduce((sum, s) => sum + (s.weight * s.reps), 0);
-      const uniqueExercises = new Set(allSets.map(s => s.exercise_id));
+      const totalVolume = savedSets.reduce((sum, s) => sum + Number(s.weight) * Number(s.reps), 0);
+      const uniqueExercises = new Set(savedSets.map(s => s.exercise_id));
       const mins = Math.floor(elapsedSeconds / 60);
       const secs = elapsedSeconds % 60;
 
       setSummaryData({
         duration: `${mins}m ${secs}s`,
-        totalSets: allSets.length,
+        totalSets: savedSets.length,
         totalVolume,
         exerciseCount: uniqueExercises.size,
         newPRs,
       });
+      isFinishedRef.current = true; // update ref immediately so BackHandler works before state re-render
       setIsFinished(true);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to save workout session.');
+      Alert.alert('Error', err.message || 'Failed to finish workout.');
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Plain function (not memoized) so it always sees the latest finishWorkout,
+  // selectedExercises, etc. The handleCloseRef below keeps BackHandler current.
   const handleClose = () => {
-    Alert.alert('Cancel Workout?', 'Your session progress will be discarded.', [
-      { text: 'Keep Training', style: 'cancel' },
-      {
-        text: 'Discard', style: 'destructive', onPress: async () => {
-          if (timerRef.current) clearInterval(timerRef.current);
-          if (workoutId) {
-            await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
-            await supabase.from('workouts').delete().eq('id', workoutId);
-          }
-          router.back();
+    Alert.alert(
+      'Exit Workout',
+      'What would you like to do?',
+      [
+        {
+          text: 'Keep Training',
+          style: 'cancel',
         },
-      },
-    ]);
+        {
+          text: 'Save & Exit',
+          onPress: () => {
+            // Saves all sets + sets end_time, then shows summary
+            finishWorkout();
+          },
+        },
+        {
+          text: 'Discard Session',
+          style: 'destructive',
+          onPress: async () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+            const wid = workoutIdRef.current;
+            if (wid) {
+              await supabase.from('workout_sets').delete().eq('workout_id', wid);
+              await supabase.from('workouts').delete().eq('id', wid);
+            }
+            router.back();
+          },
+        },
+      ]
+    );
   };
+
+  // A stable ref to handleClose so BackHandler never captures a stale version
+  const handleCloseRef = useRef(handleClose);
+  useEffect(() => {
+    handleCloseRef.current = handleClose;
+  }, [handleClose]);
 
   const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -303,7 +424,10 @@ export default function WorkoutScreen() {
   if (isFinished && summaryData) {
     return (
       <View style={styles.container}>
-        <ScrollView contentContainerStyle={styles.summaryContainer}>
+        <ScrollView
+          contentContainerStyle={styles.summaryContainer}
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.summaryEmoji}>🎉</Text>
           <Text style={styles.summaryTitle}>Workout Complete!</Text>
 
@@ -339,14 +463,17 @@ export default function WorkoutScreen() {
               ))}
             </View>
           )}
+        </ScrollView>
 
+        {/* Button pinned at bottom — always visible regardless of scroll position */}
+        <View style={styles.doneBtnContainer}>
           <Pressable
             style={({ pressed }) => pressed ? [styles.doneBtn, { opacity: 0.85 }] : styles.doneBtn}
-            onPress={() => router.back()}
+            onPress={() => router.replace('/(tabs)/index')}
           >
-            <Text style={styles.doneBtnText}>Return to House</Text>
+            <Text style={styles.doneBtnText}>Return to Home</Text>
           </Pressable>
-        </ScrollView>
+        </View>
       </View>
     );
   }
@@ -470,13 +597,43 @@ export default function WorkoutScreen() {
                 </View>
               ))}
 
-              {/* Add Set Button at bottom of sets */}
+              {/* Add Set Button */}
               <Pressable
                 style={({ pressed }) => pressed ? [styles.addSetBtn, { opacity: 0.7 }] : styles.addSetBtn}
                 onPress={() => addSet(exIdx)}
               >
                 <Text style={styles.addSetText}>＋ Add Set</Text>
               </Pressable>
+
+              {/* ── Per-exercise Save button ── */}
+              <View style={styles.logSetsRow}>
+                {savedExercises.has(se.exercise.id) ? (
+                  // Already saved — show badge + option to re-save after editing
+                  <View style={styles.savedBadge}>
+                    <Text style={styles.savedBadgeText}>✓ Logged</Text>
+                  </View>
+                ) : null}
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.logSetsBtn,
+                    savedExercises.has(se.exercise.id) && styles.logSetsBtnSaved,
+                    pressed && { opacity: 0.8 },
+                  ]}
+                  onPress={() => saveExerciseSets(exIdx)}
+                  disabled={savingExerciseId === se.exercise.id}
+                >
+                  {savingExerciseId === se.exercise.id ? (
+                    <ActivityIndicator size="small" color="#0A0A0A" />
+                  ) : (
+                    <Text style={[
+                      styles.logSetsBtnText,
+                      savedExercises.has(se.exercise.id) && styles.logSetsBtnTextSaved,
+                    ]}>
+                      {savedExercises.has(se.exercise.id) ? '↺ Re-save Sets' : '✓ Log Sets'}
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
             </View>
           ))
         )}
@@ -817,6 +974,54 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  // Log Sets button — matches Add Set visual style (dark, dashed border, green text)
+  logSetsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#1E1E1E',
+  },
+  savedBadge: {
+    backgroundColor: '#1A2E1A',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#39FF1460',
+  },
+  savedBadgeText: {
+    color: '#39FF14',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  logSetsBtn: {
+    flex: 1,
+    marginTop: 0,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: '#39FF14',
+    borderStyle: 'dashed',
+  },
+  logSetsBtnSaved: {
+    borderColor: '#39FF14',
+    backgroundColor: '#1A2E1A',
+    borderStyle: 'solid',
+  },
+  logSetsBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#39FF14',
+  },
+  logSetsBtnTextSaved: {
+    color: '#39FF14',
+  },
   addExerciseBtn: {
     backgroundColor: '#141414',
     borderWidth: 1.5,
@@ -920,7 +1125,8 @@ const styles = StyleSheet.create({
   },
   summaryContainer: {
     paddingHorizontal: 24,
-    paddingTop: 80,
+    paddingTop: 60,
+    paddingBottom: 20,
     alignItems: 'center',
   },
   summaryEmoji: {
@@ -982,14 +1188,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#FFFFFF',
   },
+  doneBtnContainer: {
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#1A1A1A',
+    backgroundColor: '#0A0A0A',
+  },
   doneBtn: {
     backgroundColor: '#39FF14',
     borderRadius: 16,
     paddingVertical: 18,
     width: '100%',
     alignItems: 'center',
-    marginTop: 32,
-    marginBottom: 40,
   },
   doneBtnText: {
     fontSize: 18,
