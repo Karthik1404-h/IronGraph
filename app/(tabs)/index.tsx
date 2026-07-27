@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react';
-import { StyleSheet, Text, View, Pressable, FlatList, ActivityIndicator, Modal } from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
 type RecentWorkout = {
@@ -122,7 +122,7 @@ export default function HomeScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>House</Text>
+        <Text style={styles.headerTitle}>Home</Text>
         <Pressable
           style={({ pressed }) => pressed ? [styles.manageLink, { opacity: 0.6 }] : styles.manageLink}
           onPress={() => router.push('/exercises')}

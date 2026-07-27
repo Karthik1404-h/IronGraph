@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet, Text, View, Pressable, TextInput, FlatList,
-  Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform
+  Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform, BackHandler
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -16,6 +16,8 @@ type SetEntry = {
   set_number: number;
   weight: string;
   reps: string;
+  logged: boolean;
+  loggedAt?: string;
 };
 
 type SelectedExercise = {
@@ -61,6 +63,11 @@ export default function WorkoutScreen() {
     totalVolume: number;
     exerciseCount: number;
     newPRs: string[];
+    startTime: string;
+    exercises: Array<{
+      name: string;
+      sets: Array<{ set_number: number; weight: number; reps: number; loggedAt?: string }>;
+    }>;
   } | null>(null);
   const [isFinished, setIsFinished] = useState(false);
 
@@ -78,6 +85,8 @@ export default function WorkoutScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [category]);
+
+
 
   const startWorkoutSession = async (uid: string) => {
     try {
@@ -148,8 +157,8 @@ export default function WorkoutScreen() {
 
       // Automatically generate 2 standard sets by default
       const initialSets: SetEntry[] = [
-        { set_number: 1, weight: '', reps: '' },
-        { set_number: 2, weight: '', reps: '' }
+        { set_number: 1, weight: '', reps: '', logged: false },
+        { set_number: 2, weight: '', reps: '', logged: false }
       ];
 
       setSelectedExercises(prev => [...prev, {
@@ -178,7 +187,7 @@ export default function WorkoutScreen() {
     setSelectedExercises(prev => {
       const next = [...prev];
       const sets = [...next[exerciseIdx].sets];
-      sets.push({ set_number: sets.length + 1, weight: '', reps: '' });
+      sets.push({ set_number: sets.length + 1, weight: '', reps: '', logged: false });
       next[exerciseIdx] = { ...next[exerciseIdx], sets };
       return next;
     });
@@ -196,6 +205,67 @@ export default function WorkoutScreen() {
 
   const removeExerciseFromSession = (exerciseIdx: number) => {
     setSelectedExercises(prev => prev.filter((_, i) => i !== exerciseIdx));
+  };
+
+  const logSet = (exerciseIdx: number, setIdx: number) => {
+    const set = selectedExercises[exerciseIdx].sets[setIdx];
+    const w = parseFloat(set.weight) || 0;
+    const r = parseInt(set.reps) || 0;
+    if (w === 0 && r === 0) {
+      Alert.alert('Missing Data', 'Please enter weight or reps before logging this set.');
+      return;
+    }
+    setSelectedExercises(prev => {
+      const next = [...prev];
+      const sets = [...next[exerciseIdx].sets];
+      sets[setIdx] = { ...sets[setIdx], logged: true, loggedAt: new Date().toISOString() };
+      next[exerciseIdx] = { ...next[exerciseIdx], sets };
+      return next;
+    });
+  };
+
+  const saveAndExit = async () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (!workoutId || !userId) {
+      router.back();
+      return;
+    }
+
+    const setsToSave: any[] = [];
+    for (const se of selectedExercises) {
+      for (const s of se.sets) {
+        const w = parseFloat(s.weight) || 0;
+        const r = parseInt(s.reps) || 0;
+        if (s.logged && (w > 0 || r > 0)) {
+          setsToSave.push({
+            workout_id: workoutId,
+            exercise_id: se.exercise.id,
+            user_id: userId,
+            set_number: s.set_number,
+            weight: w,
+            reps: r,
+          });
+        }
+      }
+    }
+
+    if (setsToSave.length === 0) {
+      // Nothing was explicitly logged — discard the empty session
+      await supabase.from('workouts').delete().eq('id', workoutId);
+      router.back();
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await supabase.from('workout_sets').insert(setsToSave);
+      await supabase.from('workouts').update({ end_time: new Date().toISOString() }).eq('id', workoutId);
+      router.back();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to save workout.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const finishWorkout = async () => {
@@ -263,12 +333,26 @@ export default function WorkoutScreen() {
       const mins = Math.floor(elapsedSeconds / 60);
       const secs = elapsedSeconds % 60;
 
+      const exerciseBreakdown = selectedExercises.map(se => ({
+        name: se.exercise.name,
+        sets: se.sets
+          .filter(s => (parseFloat(s.weight) || 0) > 0 || (parseInt(s.reps) || 0) > 0)
+          .map(s => ({
+            set_number: s.set_number,
+            weight: parseFloat(s.weight) || 0,
+            reps: parseInt(s.reps) || 0,
+            loggedAt: s.loggedAt,
+          })),
+      })).filter(e => e.sets.length > 0);
+
       setSummaryData({
         duration: `${mins}m ${secs}s`,
         totalSets: allSets.length,
         totalVolume,
         exerciseCount: uniqueExercises.size,
         newPRs,
+        startTime: new Date(Date.now() - elapsedSeconds * 1000).toISOString(),
+        exercises: exerciseBreakdown,
       });
       setIsFinished(true);
     } catch (err: any) {
@@ -278,21 +362,38 @@ export default function WorkoutScreen() {
     }
   };
 
-  const handleClose = () => {
-    Alert.alert('Cancel Workout?', 'Your session progress will be discarded.', [
-      { text: 'Keep Training', style: 'cancel' },
-      {
-        text: 'Discard', style: 'destructive', onPress: async () => {
-          if (timerRef.current) clearInterval(timerRef.current);
-          if (workoutId) {
-            await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
-            await supabase.from('workouts').delete().eq('id', workoutId);
-          }
-          router.back();
+  const handleClose = useCallback(() => {
+    Alert.alert(
+      'Cancel Workout?',
+      'What would you like to do with your current session?',
+      [
+        { text: 'Keep Training', style: 'cancel' },
+        {
+          text: 'Save & Exit',
+          onPress: saveAndExit,
         },
-      },
-    ]);
-  };
+        {
+          text: 'Discard', style: 'destructive', onPress: async () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+            if (workoutId) {
+              await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
+              await supabase.from('workouts').delete().eq('id', workoutId);
+            }
+            router.back();
+          },
+        },
+      ]
+    );
+  }, [workoutId, saveAndExit, router]);
+
+  // Intercept Android hardware back button — show the same dialog as the ✕ button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleClose();
+      return true; // prevent default back navigation
+    });
+    return () => backHandler.remove();
+  }, [handleClose]);
 
   const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -300,12 +401,22 @@ export default function WorkoutScreen() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatLogTime = (iso: string): string => {
+    const d = new Date(iso);
+    const h = d.getHours();
+    const m = d.getMinutes().toString().padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    return `${hour12}:${m} ${ampm}`;
+  };
+
   if (isFinished && summaryData) {
     return (
       <View style={styles.container}>
-        <ScrollView contentContainerStyle={styles.summaryContainer}>
+        <ScrollView contentContainerStyle={styles.summaryContainer} showsVerticalScrollIndicator={false}>
           <Text style={styles.summaryEmoji}>🎉</Text>
           <Text style={styles.summaryTitle}>Workout Complete!</Text>
+          <Text style={styles.summarySubtitle}>Started at {formatLogTime(summaryData.startTime)}</Text>
 
           <View style={styles.summaryStatsRow}>
             <View style={styles.summaryStat}>
@@ -335,6 +446,39 @@ export default function WorkoutScreen() {
               {summaryData.newPRs.map((name, i) => (
                 <View key={i} style={styles.prItem}>
                   <Text style={styles.prItemText}>{name}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Per-Exercise Breakdown */}
+          {summaryData.exercises.length > 0 && (
+            <View style={styles.exercisesSection}>
+              <Text style={styles.exercisesSectionTitle}>── Exercises Logged ──</Text>
+              {summaryData.exercises.map((ex, exIdx) => (
+                <View key={exIdx} style={styles.exerciseSummaryCard}>
+                  <Text style={styles.exerciseSummaryName}>📌 {ex.name}</Text>
+                  {/* Table Header */}
+                  <View style={styles.exerciseSummaryHeaderRow}>
+                    <Text style={[styles.exerciseSummaryHeaderCell, { flex: 0.5 }]}>SET</Text>
+                    <Text style={[styles.exerciseSummaryHeaderCell, { flex: 1 }]}>WEIGHT</Text>
+                    <Text style={[styles.exerciseSummaryHeaderCell, { flex: 0.8 }]}>REPS</Text>
+                    <Text style={[styles.exerciseSummaryHeaderCell, { flex: 1 }]}>TIME</Text>
+                  </View>
+                  {/* Set Rows */}
+                  {ex.sets.map((s, sIdx) => (
+                    <View key={sIdx} style={[
+                      styles.setDetailRow,
+                      sIdx % 2 === 0 && styles.setDetailRowAlt
+                    ]}>
+                      <Text style={[styles.setDetailCell, { flex: 0.5 }]}>{s.set_number}</Text>
+                      <Text style={[styles.setDetailCell, { flex: 1 }]}>{s.weight} kg</Text>
+                      <Text style={[styles.setDetailCell, { flex: 0.8 }]}>{s.reps}</Text>
+                      <Text style={[styles.setDetailCellMuted, { flex: 1 }]}>
+                        {s.loggedAt ? formatLogTime(s.loggedAt) : '—'}
+                      </Text>
+                    </View>
+                  ))}
                 </View>
               ))}
             </View>
@@ -413,32 +557,37 @@ export default function WorkoutScreen() {
                 <Text style={[styles.headerCell, { flex: 0.6 }]}>SET</Text>
                 <Text style={[styles.headerCell, { flex: 2 }]}>WEIGHT (KG)</Text>
                 <Text style={[styles.headerCell, { flex: 1.2 }]}>REPS</Text>
-                <View style={{ width: 32 }} />
+                <Text style={[styles.headerCell, { width: 54 }]}>LOG</Text>
+                <View style={{ width: 28 }} />
               </View>
 
               {/* Set Rows (Strict Horizontal Alignment) */}
               {se.sets.map((s, setIdx) => (
-                <View key={setIdx} style={styles.tableRow}>
+                <View key={setIdx} style={[styles.tableRow, s.logged && styles.tableRowLogged]}>
                   <View style={[styles.cell, { flex: 0.6 }]}>
-                    <Text style={styles.setNumText}>{s.set_number}</Text>
+                    <Text style={[styles.setNumText, s.logged && styles.setNumLogged]}>{s.set_number}</Text>
                   </View>
 
                   {/* Dual-Input Weight System: Text Input + Dropdown Picker Button */}
                   <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
                     <TextInput
-                      style={[styles.inputField, { flex: 1 }]}
+                      style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
                       placeholder="0"
                       placeholderTextColor="#555555"
                       keyboardType="numeric"
                       value={s.weight}
-                      onChangeText={(val) => updateSet(exIdx, setIdx, 'weight', val)}
+                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'weight', val); }}
+                      editable={!s.logged}
                     />
                     <Pressable
-                      style={styles.pickerBtn}
+                      style={[styles.pickerBtn, s.logged && { opacity: 0.35 }]}
                       onPress={() => {
-                        setPickerTarget({ exIdx, setIdx });
-                        setShowWeightPickerModal(true);
+                        if (!s.logged) {
+                          setPickerTarget({ exIdx, setIdx });
+                          setShowWeightPickerModal(true);
+                        }
                       }}
+                      disabled={s.logged}
                     >
                       <Text style={styles.pickerBtnText}>▼</Text>
                     </Pressable>
@@ -447,17 +596,34 @@ export default function WorkoutScreen() {
                   {/* Reps Input */}
                   <View style={[styles.cell, { flex: 1.2 }]}>
                     <TextInput
-                      style={[styles.inputField, { width: '100%' }]}
+                      style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
                       placeholder="0"
                       placeholderTextColor="#555555"
                       keyboardType="numeric"
                       value={s.reps}
-                      onChangeText={(val) => updateSet(exIdx, setIdx, 'reps', val)}
+                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'reps', val); }}
+                      editable={!s.logged}
                     />
                   </View>
 
+                  {/* Log Set Button / Logged Indicator */}
+                  <View style={{ width: 54, alignItems: 'center', justifyContent: 'center' }}>
+                    {s.logged ? (
+                      <View style={styles.loggedBadge}>
+                        <Text style={styles.loggedBadgeText}>✓</Text>
+                      </View>
+                    ) : (
+                      <Pressable
+                        style={({ pressed }) => [styles.logSetBtn, pressed && { opacity: 0.7 }]}
+                        onPress={() => logSet(exIdx, setIdx)}
+                      >
+                        <Text style={styles.logSetText}>Log</Text>
+                      </Pressable>
+                    )}
+                  </View>
+
                   {/* Delete Set Row Button */}
-                  <View style={{ width: 32, alignItems: 'center' }}>
+                  <View style={{ width: 28, alignItems: 'center' }}>
                     {se.sets.length > 1 && (
                       <Pressable
                         style={styles.deleteSetBtn}
@@ -997,9 +1163,125 @@ const styles = StyleSheet.create({
     color: '#0A0A0A',
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(10,10,10,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // ── Logged Set Row Styles ─────────────────────────────────────────
+  tableRowLogged: {
+    backgroundColor: 'rgba(57,255,20,0.05)',
+    borderRadius: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#39FF14',
+    paddingLeft: 4,
+  },
+  setNumLogged: {
+    color: '#39FF14',
+  },
+  inputFieldLogged: {
+    backgroundColor: '#0D1A0D',
+    borderColor: '#39FF1440',
+    color: '#39FF14',
+  },
+  logSetBtn: {
+    backgroundColor: '#1A2E1A',
+    borderWidth: 1.5,
+    borderColor: '#39FF14',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 46,
+  },
+  logSetText: {
+    color: '#39FF14',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  loggedBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#1A2E1A',
+    borderWidth: 1.5,
+    borderColor: '#39FF14',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loggedBadgeText: {
+    color: '#39FF14',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+
+  // ── Summary Screen Styles ─────────────────────────────────────────
+  summarySubtitle: {
+    fontSize: 14,
+    color: '#888888',
+    marginBottom: 28,
+    marginTop: -4,
+  },
+  exercisesSection: {
+    width: '100%',
+    marginTop: 24,
+    marginBottom: 8,
+  },
+  exercisesSectionTitle: {
+    fontSize: 14,
+    color: '#555555',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 16,
+    letterSpacing: 1,
+  },
+  exerciseSummaryCard: {
+    backgroundColor: '#141414',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#222222',
+  },
+  exerciseSummaryName: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    marginBottom: 12,
+  },
+  exerciseSummaryHeaderRow: {
+    flexDirection: 'row',
+    marginBottom: 6,
+    paddingHorizontal: 4,
+  },
+  exerciseSummaryHeaderCell: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#555555',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  setDetailRow: {
+    flexDirection: 'row',
+    paddingVertical: 9,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+  },
+  setDetailRowAlt: {
+    backgroundColor: '#0F0F0F',
+  },
+  setDetailCell: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  setDetailCellMuted: {
+    fontSize: 12,
+    color: '#39FF14',
+    textAlign: 'center',
+    fontWeight: '500',
   },
 });

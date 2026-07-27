@@ -48,9 +48,14 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const segments = useSegments();
   const router = useRouter();
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Wait until the first auth event fires before making routing decisions.
+      // This prevents a false redirect to /auth while AsyncStorage loads the saved token.
+      setInitialized(true);
+
       const inAuthGroup = segments[0] === 'auth';
 
       if (session && inAuthGroup) {
@@ -65,7 +70,8 @@ function RootLayoutNav() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [segments]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps: subscribe once, read `segments` as a ref via closure
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
