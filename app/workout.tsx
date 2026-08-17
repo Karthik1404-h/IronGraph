@@ -364,14 +364,11 @@ export default function WorkoutScreen() {
 
   const handleClose = useCallback(() => {
     Alert.alert(
-      'Cancel Workout?',
-      'What would you like to do with your current session?',
+      'Exit Workout?',
+      'What would you like to do?',
       [
         { text: 'Keep Training', style: 'cancel' },
-        {
-          text: 'Save & Exit',
-          onPress: saveAndExit,
-        },
+        { text: 'Save & Exit', onPress: saveAndExit },
         {
           text: 'Discard', style: 'destructive', onPress: async () => {
             if (timerRef.current) clearInterval(timerRef.current);
@@ -386,14 +383,20 @@ export default function WorkoutScreen() {
     );
   }, [workoutId, saveAndExit, router]);
 
-  // Intercept Android hardware back button — show the same dialog as the ✕ button
+  // Intercept Android hardware back button
+  // If workout is already saved (summary showing) → go home directly, no dialog.
+  // If still in progress → show the exit dialog.
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      handleClose();
-      return true; // prevent default back navigation
+      if (isFinished) {
+        router.back();
+      } else {
+        handleClose();
+      }
+      return true;
     });
     return () => backHandler.remove();
-  }, [handleClose]);
+  }, [handleClose, isFinished, router]);
 
   const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -500,7 +503,7 @@ export default function WorkoutScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Top Navigation Bar */}
+      {/* Top Bar */}
       <View style={styles.topBar}>
         <Pressable onPress={handleClose} style={styles.closeBtnContainer}>
           <Text style={styles.closeBtn}>✕</Text>
@@ -509,10 +512,12 @@ export default function WorkoutScreen() {
           <Text style={styles.timerText}>⏱️ {formatTimer(elapsedSeconds)}</Text>
         </View>
         <Pressable
-          style={({ pressed }) => pressed ? [styles.finishBtn, { opacity: 0.7 }] : styles.finishBtn}
+          style={({ pressed }) =>
+            pressed ? [styles.finishBtn, { opacity: 0.8 }] : styles.finishBtn
+          }
           onPress={finishWorkout}
         >
-          <Text style={styles.finishBtnText}>Finish</Text>
+          <Text style={styles.finishBtnText}>✓ Finish</Text>
         </Pressable>
       </View>
 
@@ -522,134 +527,141 @@ export default function WorkoutScreen() {
           <Text style={styles.categorySub}>Log your weights and reps below</Text>
         </View>
 
-        {/* Selected Exercises List */}
-        {selectedExercises.length === 0 ? (
+        {selectedExercises.length === 0 && (
           <View style={styles.emptySessionBox}>
             <Text style={styles.emptySessionEmoji}>🏋️‍♂️</Text>
             <Text style={styles.emptySessionText}>
-              No exercises added yet.{'\n'}Tap the button below to add your first exercise!
+              No exercises added yet.{'\n'}Tap "+ Add Exercise" below to get started!
             </Text>
           </View>
-        ) : (
-          selectedExercises.map((se, exIdx) => (
-            <View key={se.exercise.id} style={styles.exerciseCard}>
-              {/* Card Header with PR and Delete */}
-              <View style={styles.cardHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.exerciseTitle}>{se.exercise.name}</Text>
-                  {se.pr ? (
-                    <View style={styles.prBadge}>
-                      <Text style={styles.prBadgeText}>
-                        🏆 PR: {se.pr.weight} kg × {se.pr.reps} reps
-                      </Text>
+        )}
+
+        {selectedExercises.map((se, exIdx) => (
+          <View key={se.exercise.id} style={styles.exerciseCard}>
+            {/* Card Header with PR and Delete */}
+            <View style={styles.cardHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.exerciseTitle}>{se.exercise.name}</Text>
+                {se.pr ? (
+                  <View style={styles.prBadge}>
+                    <Text style={styles.prBadgeText}>
+                      🏆 PR: {se.pr.weight} kg × {se.pr.reps} reps
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.noPrText}>No historical PR logged yet</Text>
+                )}
+              </View>
+              <Pressable onPress={() => removeExerciseFromSession(exIdx)} style={styles.removeExBtn}>
+                <Text style={styles.removeExText}>✕</Text>
+              </Pressable>
+            </View>
+
+            {/* Set Table Headers */}
+            <View style={styles.tableHeaderRow}>
+              <Text style={[styles.headerCell, { flex: 0.6 }]}>SET</Text>
+              <Text style={[styles.headerCell, { flex: 2 }]}>WEIGHT (KG)</Text>
+              <Text style={[styles.headerCell, { flex: 1.2 }]}>REPS</Text>
+              <Text style={[styles.headerCell, { width: 54 }]}>LOG</Text>
+              <View style={{ width: 28 }} />
+            </View>
+
+            {/* Set Rows */}
+            {se.sets.map((s, setIdx) => (
+              <View key={setIdx} style={[styles.tableRow, s.logged && styles.tableRowLogged]}>
+                <View style={[styles.cell, { flex: 0.6 }]}>
+                  <Text style={[styles.setNumText, s.logged && styles.setNumLogged]}>{s.set_number}</Text>
+                </View>
+
+                <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
+                  <TextInput
+                    style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
+                    placeholder="0"
+                    placeholderTextColor="#555555"
+                    keyboardType="numeric"
+                    value={s.weight}
+                    onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'weight', val); }}
+                    editable={!s.logged}
+                  />
+                  <Pressable
+                    style={[styles.pickerBtn, s.logged && { opacity: 0.35 }]}
+                    onPress={() => {
+                      if (!s.logged) {
+                        setPickerTarget({ exIdx, setIdx });
+                        setShowWeightPickerModal(true);
+                      }
+                    }}
+                    disabled={s.logged}
+                  >
+                    <Text style={styles.pickerBtnText}>▼</Text>
+                  </Pressable>
+                </View>
+
+                <View style={[styles.cell, { flex: 1.2 }]}>
+                  <TextInput
+                    style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
+                    placeholder="0"
+                    placeholderTextColor="#555555"
+                    keyboardType="numeric"
+                    value={s.reps}
+                    onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'reps', val); }}
+                    editable={!s.logged}
+                  />
+                </View>
+
+                <View style={{ width: 54, alignItems: 'center', justifyContent: 'center' }}>
+                  {s.logged ? (
+                    <View style={styles.loggedBadge}>
+                      <Text style={styles.loggedBadgeText}>✓</Text>
                     </View>
                   ) : (
-                    <Text style={styles.noPrText}>No historical PR logged yet</Text>
+                    <Pressable
+                      style={({ pressed }) => [styles.logSetBtn, pressed && { opacity: 0.7 }]}
+                      onPress={() => logSet(exIdx, setIdx)}
+                    >
+                      <Text style={styles.logSetText}>Log</Text>
+                    </Pressable>
                   )}
                 </View>
-                <Pressable onPress={() => removeExerciseFromSession(exIdx)} style={styles.removeExBtn}>
-                  <Text style={styles.removeExText}>✕</Text>
-                </Pressable>
-              </View>
 
-              {/* Set Table Headers (Strict Flexbox Alignment) */}
-              <View style={styles.tableHeaderRow}>
-                <Text style={[styles.headerCell, { flex: 0.6 }]}>SET</Text>
-                <Text style={[styles.headerCell, { flex: 2 }]}>WEIGHT (KG)</Text>
-                <Text style={[styles.headerCell, { flex: 1.2 }]}>REPS</Text>
-                <Text style={[styles.headerCell, { width: 54 }]}>LOG</Text>
-                <View style={{ width: 28 }} />
-              </View>
-
-              {/* Set Rows (Strict Horizontal Alignment) */}
-              {se.sets.map((s, setIdx) => (
-                <View key={setIdx} style={[styles.tableRow, s.logged && styles.tableRowLogged]}>
-                  <View style={[styles.cell, { flex: 0.6 }]}>
-                    <Text style={[styles.setNumText, s.logged && styles.setNumLogged]}>{s.set_number}</Text>
-                  </View>
-
-                  {/* Dual-Input Weight System: Text Input + Dropdown Picker Button */}
-                  <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
-                    <TextInput
-                      style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
-                      placeholder="0"
-                      placeholderTextColor="#555555"
-                      keyboardType="numeric"
-                      value={s.weight}
-                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'weight', val); }}
-                      editable={!s.logged}
-                    />
-                    <Pressable
-                      style={[styles.pickerBtn, s.logged && { opacity: 0.35 }]}
-                      onPress={() => {
-                        if (!s.logged) {
-                          setPickerTarget({ exIdx, setIdx });
-                          setShowWeightPickerModal(true);
-                        }
-                      }}
-                      disabled={s.logged}
-                    >
-                      <Text style={styles.pickerBtnText}>▼</Text>
+                <View style={{ width: 28, alignItems: 'center' }}>
+                  {se.sets.length > 1 && (
+                    <Pressable style={styles.deleteSetBtn} onPress={() => removeSet(exIdx, setIdx)}>
+                      <Text style={styles.deleteSetText}>−</Text>
                     </Pressable>
-                  </View>
-
-                  {/* Reps Input */}
-                  <View style={[styles.cell, { flex: 1.2 }]}>
-                    <TextInput
-                      style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
-                      placeholder="0"
-                      placeholderTextColor="#555555"
-                      keyboardType="numeric"
-                      value={s.reps}
-                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'reps', val); }}
-                      editable={!s.logged}
-                    />
-                  </View>
-
-                  {/* Log Set Button / Logged Indicator */}
-                  <View style={{ width: 54, alignItems: 'center', justifyContent: 'center' }}>
-                    {s.logged ? (
-                      <View style={styles.loggedBadge}>
-                        <Text style={styles.loggedBadgeText}>✓</Text>
-                      </View>
-                    ) : (
-                      <Pressable
-                        style={({ pressed }) => [styles.logSetBtn, pressed && { opacity: 0.7 }]}
-                        onPress={() => logSet(exIdx, setIdx)}
-                      >
-                        <Text style={styles.logSetText}>Log</Text>
-                      </Pressable>
-                    )}
-                  </View>
-
-                  {/* Delete Set Row Button */}
-                  <View style={{ width: 28, alignItems: 'center' }}>
-                    {se.sets.length > 1 && (
-                      <Pressable
-                        style={styles.deleteSetBtn}
-                        onPress={() => removeSet(exIdx, setIdx)}
-                      >
-                        <Text style={styles.deleteSetText}>−</Text>
-                      </Pressable>
-                    )}
-                  </View>
+                  )}
                 </View>
-              ))}
+              </View>
+            ))}
 
-              {/* Add Set Button at bottom of sets */}
+            {/* Add Set + Save row */}
+            <View style={styles.cardActionsRow}>
               <Pressable
-                style={({ pressed }) => pressed ? [styles.addSetBtn, { opacity: 0.7 }] : styles.addSetBtn}
+                style={({ pressed }) =>
+                  pressed ? [styles.addSetBtn, { opacity: 0.7 }] : styles.addSetBtn
+                }
                 onPress={() => addSet(exIdx)}
               >
                 <Text style={styles.addSetText}>＋ Add Set</Text>
               </Pressable>
-            </View>
-          ))
-        )}
 
-        {/* Prompt User with clean 'Add an Exercise' Button */}
+              <Pressable
+                style={({ pressed }) =>
+                  pressed ? [styles.saveBtn, { opacity: 0.8 }] : styles.saveBtn
+                }
+                onPress={finishWorkout}
+              >
+                <Text style={styles.saveBtnText}>✓ Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+
+        {/* Add Exercise button inside ScrollView */}
         <Pressable
-          style={({ pressed }) => pressed ? [styles.addExerciseBtn, { opacity: 0.85 }] : styles.addExerciseBtn}
+          style={({ pressed }) =>
+            pressed ? [styles.addExerciseBtn, { opacity: 0.85 }] : styles.addExerciseBtn
+          }
           onPress={() => setShowExerciseModal(true)}
         >
           <Text style={styles.addExerciseText}>＋ Add an Exercise</Text>
@@ -804,11 +816,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 12,
+    shadowColor: '#39FF14',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 5,
   },
   finishBtnText: {
     fontSize: 15,
     fontWeight: 'bold',
     color: '#0A0A0A',
+    letterSpacing: 0.3,
+  },
+  stickyFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    paddingBottom: 20,
+    backgroundColor: '#0A0A0A',
+    borderTopWidth: 1,
+    borderTopColor: '#1C1C1C',
+  },
+  footerAddBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#333333',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#141414',
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -968,9 +1006,15 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: -2,
   },
+  cardActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
   addSetBtn: {
     marginTop: 6,
     paddingVertical: 12,
+    paddingHorizontal: 20,
     alignItems: 'center',
     borderRadius: 12,
     backgroundColor: '#1A1A1A',
@@ -979,6 +1023,22 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   addSetText: {
+    color: '#39FF14',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  saveBtn: {
+    marginTop: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    borderRadius: 12,
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    borderStyle: 'dashed',
+  },
+  saveBtnText: {
     color: '#39FF14',
     fontSize: 14,
     fontWeight: '600',

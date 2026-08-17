@@ -4,15 +4,16 @@ import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, Style
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
 
-// Rounds val up to the nearest "nice" scale value (1, 2, 5, 10, 20, 50 …)
-function niceNum(val: number): number {
-  if (val <= 0) return 1;
-  const exp = Math.floor(Math.log10(val));
-  const f = val / Math.pow(10, exp);
-  if (f <= 1) return Math.pow(10, exp);
-  if (f <= 2) return 2 * Math.pow(10, exp);
-  if (f <= 5) return 5 * Math.pow(10, exp);
-  return 10 * Math.pow(10, exp);
+// Pick a human-friendly step size given a data span
+function niceStep(span: number): number {
+  if (span <= 0) return 1;
+  const raw = span / 5;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / magnitude;
+  if (f < 1.5) return magnitude;
+  if (f < 3.5) return 2 * magnitude;
+  if (f < 7.5) return 5 * magnitude;
+  return 10 * magnitude;
 }
 
 type Profile = {
@@ -371,6 +372,7 @@ export default function SocialScreen() {
   };
 
   // --- CHART LOGIC ---
+  // topFriend: the first friend in the leaderboard who is not the current user
   const topFriend = useMemo(() => {
     if (!currentUserId || leaderboard.length < 2) return null;
     return leaderboard.find(entry => entry.id !== currentUserId) || null;
@@ -460,38 +462,57 @@ export default function SocialScreen() {
     return processLogsForChart(topFriend.id);
   }, [allLogs, topFriend, horizon]);
 
-  // Y-Axis: combines both datasets, snaps to nice step boundaries with 1 step of breathing room
-  const yAxisConfig = useMemo(() => {
-    const fallback = { min: 60, max: 100, range: 40, step: 10, noOfSections: 4 };
-    if (chartDataMy.length === 0 && chartDataFriend.length === 0) return fallback;
+  // Build a tight Y-axis config for a SINGLE user's dataset.
+  // Each person gets their own scale so small day-to-day changes are clearly visible.
+  // Key rule: yAxisOffset = axisMin, maxValue = range (NOT absolute max).
+  const buildAxisConfig = (data: { value: number }[]) => {
+    const fallback = { axisMin: 60, range: 10, step: 2, noOfSections: 5, labels: ['60kg','62kg','64kg','66kg','68kg','70kg'] };
+    const vals = data.map(d => d.value).filter(v => isFinite(v) && v != null);
+    if (vals.length === 0) return fallback;
 
-    const allVals = [
-      ...chartDataMy.map(d => d.value),
-      ...chartDataFriend.map(d => d.value),
-    ].filter(v => isFinite(v));
+    const rawMin = Math.min(...vals);
+    const rawMax = Math.max(...vals);
+    // Minimum 2kg visible span so a flat line isn't a spike
+    const dataSpan = Math.max(rawMax - rawMin, 2);
 
-    if (allVals.length === 0) return fallback;
+    // Choose a step appropriate for the variation magnitude
+    let step: number;
+    if (dataSpan <= 1.5)  step = 0.5;
+    else if (dataSpan <= 4)  step = 1;
+    else if (dataSpan <= 10) step = 2;
+    else step = niceStep(dataSpan / 4);
 
-    const rawMin = Math.min(...allVals);
-    const rawMax = Math.max(...allVals);
-    const span = Math.max(rawMax - rawMin, 4);
-    const step = niceNum(span / 5);
-    const min = Math.max(0, Math.floor(rawMin / step) * step - step);
-    const max = Math.ceil(rawMax / step) * step + step;
-    const range = max - min;
-    const noOfSections = Math.round(range / step);
+    let axisMin = Math.max(0, Math.floor(rawMin / step) * step - step);
+    let axisMax = Math.ceil(rawMax / step) * step + step;
+    let noOfSections = Math.round((axisMax - axisMin) / step);
 
-    return { min, max, range, step, noOfSections };
-  }, [chartDataMy, chartDataFriend]);
-
-  const yAxisLabelTexts = useMemo(() => {
-    const labels: string[] = [];
-    for (let i = 0; i <= yAxisConfig.noOfSections; i++) {
-      const val = yAxisConfig.min + i * yAxisConfig.step;
-      labels.push(Number.isInteger(val) ? `${val}kg` : `${val.toFixed(1)}kg`);
+    // Cap at 6 sections max
+    while (noOfSections > 6) {
+      step *= 2;
+      axisMin = Math.max(0, Math.floor(rawMin / step) * step - step);
+      axisMax = Math.ceil(rawMax / step) * step + step;
+      noOfSections = Math.round((axisMax - axisMin) / step);
     }
-    return labels;
-  }, [yAxisConfig]);
+
+    const range = axisMax - axisMin;
+    const labels: string[] = [];
+    for (let i = 0; i <= noOfSections; i++) {
+      const v = axisMin + i * step;
+      // Show 1 decimal for sub-1 steps, otherwise integer
+      labels.push(step < 1 ? `${v.toFixed(1)}kg` : `${Math.round(v)}kg`);
+    }
+    return { axisMin, range, step, noOfSections, labels };
+  };
+
+  const myAxisConfig     = useMemo(() => buildAxisConfig(chartDataMy),     [chartDataMy]);
+  const friendAxisConfig = useMemo(() => buildAxisConfig(chartDataFriend), [chartDataFriend]);
+
+  // Compute the change over the currently selected period for a dataset
+  const periodChange = (data: { value: number }[]) => {
+    if (data.length < 2) return null;
+    return parseFloat((data[data.length - 1].value - data[0].value).toFixed(1));
+  };
+
 
   return (
     <View style={styles.container}>
@@ -546,17 +567,7 @@ export default function SocialScreen() {
                 <Text style={[styles.emptyText, { marginBottom: 20 }]}>Add friends to unlock the comparison chart.</Text>
               ) : (
                 <>
-                  <View style={styles.chartLegendRow}>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendDot, { backgroundColor: '#39FF14' }]} />
-                      <Text style={styles.legendText}>You</Text>
-                    </View>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendDot, { backgroundColor: '#00FFFF' }]} />
-                      <Text style={styles.legendText}>{topFriend.name}</Text>
-                    </View>
-                  </View>
-
+                  {/* Time horizon switcher */}
                   <View style={styles.horizonSwitcher}>
                     {HORIZONS.map((h) => (
                       <Pressable
@@ -571,35 +582,116 @@ export default function SocialScreen() {
                     ))}
                   </View>
 
-                  <View style={styles.chartWrapper}>
-                    <LineChart
-                      data={chartDataMy.map(d => ({ ...d, value: Math.max(0, d.value - yAxisConfig.min) }))}
-                      data2={chartDataFriend.map(d => ({ ...d, value: Math.max(0, d.value - yAxisConfig.min) }))}
-                      color1="#39FF14"
-                      color2="#00FFFF"
-                      thickness={3}
-                      dataPointsColor1="#FFFFFF"
-                      dataPointsColor2="#FFFFFF"
-                      textColor="#A0A0A0"
-                      xAxisColor="#333333"
-                      yAxisColor="#333333"
-                      yAxisTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
-                      xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10, textAlign: 'center' }}
-                      rulesColor="#1A1A1A"
-                      hideRules
-                      width={Dimensions.get('window').width - 138}
-                      height={180}
-                      isAnimated
-                      noOfSections={yAxisConfig.noOfSections}
-                      maxValue={yAxisConfig.range}
-                      stepValue={yAxisConfig.step}
-                      yAxisLabelTexts={yAxisLabelTexts}
-                      yAxisLabelWidth={50}
-                      spacing={(Dimensions.get('window').width - 178) / Math.max(1, chartDataMy.length - 1)}
-                      initialSpacing={20}
-                      endSpacing={20}
-                    />
-                  </View>
+                  {/* ---- YOUR chart ---- */}
+                  {chartDataMy.length > 0 && (() => {
+                    const cfg = myAxisConfig;
+                    const change = periodChange(chartDataMy);
+                    const chartW = Dimensions.get('window').width - 148;
+                    return (
+                      <View style={styles.individualChartBlock}>
+                        <View style={styles.individualChartHeader}>
+                          <View style={[styles.legendDot, { backgroundColor: '#39FF14' }]} />
+                          <Text style={styles.individualChartName}>You</Text>
+                          <Text style={styles.individualChartCurrent}>
+                            {chartDataMy[chartDataMy.length - 1].value.toFixed(1)} kg
+                          </Text>
+                          {change !== null && (
+                            <Text style={[
+                              styles.individualChartChange,
+                              { color: change < 0 ? '#39FF14' : change > 0 ? '#FF453A' : '#888' }
+                            ]}>
+                              {change > 0 ? `+${change}` : change} kg
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.chartWrapper}>
+                          <LineChart
+                            data={chartDataMy}
+                            color="#39FF14"
+                            thickness={3}
+                            dataPointsColor="#FFFFFF"
+                            dataPointsRadius={4}
+                            textColor="#A0A0A0"
+                            xAxisColor="#333333"
+                            yAxisColor="#333333"
+                            yAxisTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                            xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10, textAlign: 'center' }}
+                            rulesColor="#252525"
+                            rulesType="solid"
+                            width={chartW}
+                            height={140}
+                            isAnimated
+                            noOfSections={cfg.noOfSections}
+                            maxValue={cfg.range}
+                            stepValue={cfg.step}
+                            yAxisOffset={cfg.axisMin}
+                            yAxisLabelTexts={cfg.labels}
+                            yAxisLabelWidth={52}
+                            hideXAxisText
+                            disableScroll
+                            spacing={(chartW - 40) / Math.max(1, chartDataMy.length - 1)}
+                            initialSpacing={20}
+                            endSpacing={20}
+                          />
+                        </View>
+                      </View>
+                    );
+                  })()}
+
+                  {/* ---- FRIEND chart ---- */}
+                  {chartDataFriend.length > 0 && (() => {
+                    const cfg = friendAxisConfig;
+                    const change = periodChange(chartDataFriend);
+                    const chartW = Dimensions.get('window').width - 148;
+                    return (
+                      <View style={[styles.individualChartBlock, { marginTop: 4 }]}>
+                        <View style={styles.individualChartHeader}>
+                          <View style={[styles.legendDot, { backgroundColor: '#00FFFF' }]} />
+                          <Text style={styles.individualChartName}>{topFriend.name}</Text>
+                          <Text style={styles.individualChartCurrent}>
+                            {chartDataFriend[chartDataFriend.length - 1].value.toFixed(1)} kg
+                          </Text>
+                          {change !== null && (
+                            <Text style={[
+                              styles.individualChartChange,
+                              { color: change < 0 ? '#39FF14' : change > 0 ? '#FF453A' : '#888' }
+                            ]}>
+                              {change > 0 ? `+${change}` : change} kg
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.chartWrapper}>
+                          <LineChart
+                            data={chartDataFriend}
+                            color="#00FFFF"
+                            thickness={3}
+                            dataPointsColor="#FFFFFF"
+                            dataPointsRadius={4}
+                            textColor="#A0A0A0"
+                            xAxisColor="#333333"
+                            yAxisColor="#333333"
+                            yAxisTextStyle={{ color: '#A0A0A0', fontSize: 10 }}
+                            xAxisLabelTextStyle={{ color: '#A0A0A0', fontSize: 10, textAlign: 'center' }}
+                            rulesColor="#252525"
+                            rulesType="solid"
+                            width={chartW}
+                            height={140}
+                            isAnimated
+                            noOfSections={cfg.noOfSections}
+                            maxValue={cfg.range}
+                            stepValue={cfg.step}
+                            yAxisOffset={cfg.axisMin}
+                            yAxisLabelTexts={cfg.labels}
+                            yAxisLabelWidth={52}
+                            disableScroll
+                            spacing={(chartW - 40) / Math.max(1, chartDataFriend.length - 1)}
+                            initialSpacing={20}
+                            endSpacing={20}
+                          />
+                        </View>
+                      </View>
+                    );
+                  })()}
                 </>
               )}
             </View>
@@ -797,6 +889,13 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 16,
   },
+  chartSubtitle: {
+    fontSize: 12,
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 12,
+    fontStyle: 'italic',
+  },
   horizonSwitcher: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -874,5 +973,37 @@ const styles = StyleSheet.create({
   globalUserLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-  }
-});
+  },
+  individualChartBlock: {
+    backgroundColor: '#0F0F0F',
+    borderRadius: 12,
+    paddingTop: 12,
+    paddingBottom: 6,
+    paddingHorizontal: 4,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    marginBottom: 12,
+  },
+  individualChartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    gap: 8,
+  },
+  individualChartName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  individualChartCurrent: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#AAAAAA',
+  },
+  individualChartChange: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+})

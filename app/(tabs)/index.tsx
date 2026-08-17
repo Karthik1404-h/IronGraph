@@ -3,6 +3,17 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
+type WorkoutSet = {
+  weight: number;
+  reps: number;
+  setNumber: number;
+};
+
+type WorkoutExercise = {
+  name: string;
+  sets: WorkoutSet[];
+};
+
 type RecentWorkout = {
   id: string;
   start_time: string;
@@ -10,6 +21,7 @@ type RecentWorkout = {
   exerciseCount: number;
   totalSets: number;
   totalVolume: number;
+  exercises: WorkoutExercise[];
 };
 
 export default function HomeScreen() {
@@ -52,11 +64,26 @@ export default function HomeScreen() {
         for (const w of workouts) {
           const { data: sets } = await supabase
             .from('workout_sets')
-            .select('exercise_id, weight, reps')
-            .eq('workout_id', w.id);
+            .select('exercise_id, weight, reps, set_number, exercises(name)')
+            .eq('workout_id', w.id)
+            .order('set_number', { ascending: true });
 
-          const uniqueExercises = new Set((sets || []).map(s => s.exercise_id));
+          const uniqueExercises = new Set((sets || []).map((s: any) => s.exercise_id));
           const totalVolume = (sets || []).reduce((sum: number, s: any) => sum + (Number(s.weight) * Number(s.reps)), 0);
+
+          // Group sets by exercise name
+          const exerciseMap = new Map<string, WorkoutExercise>();
+          for (const s of (sets || []) as any[]) {
+            const exName: string = s.exercises?.name || 'Unknown Exercise';
+            if (!exerciseMap.has(exName)) {
+              exerciseMap.set(exName, { name: exName, sets: [] });
+            }
+            exerciseMap.get(exName)!.sets.push({
+              weight: Number(s.weight),
+              reps: Number(s.reps),
+              setNumber: Number(s.set_number),
+            });
+          }
 
           enriched.push({
             id: w.id,
@@ -65,6 +92,7 @@ export default function HomeScreen() {
             exerciseCount: uniqueExercises.size,
             totalSets: (sets || []).length,
             totalVolume,
+            exercises: Array.from(exerciseMap.values()),
           });
         }
         setRecentWorkouts(enriched);
@@ -103,20 +131,51 @@ export default function HomeScreen() {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const renderWorkoutItem = ({ item }: { item: RecentWorkout }) => (
-    <View style={styles.workoutCard}>
-      <View style={styles.workoutCardLeft}>
-        <Text style={styles.workoutDate}>{formatDate(item.start_time)}</Text>
-        <Text style={styles.workoutMeta}>
-          {item.exerciseCount} exercise{item.exerciseCount !== 1 ? 's' : ''} · {item.totalSets} set{item.totalSets !== 1 ? 's' : ''}
-        </Text>
+  const renderWorkoutItem = ({ item }: { item: RecentWorkout }) => {
+    const visibleExercises = item.exercises.slice(0, 3);
+    const hiddenCount = item.exercises.length - visibleExercises.length;
+
+    return (
+      <View style={styles.workoutCard}>
+        {/* Header Row */}
+        <View style={styles.workoutCardHeader}>
+          <View style={styles.workoutCardLeft}>
+            <Text style={styles.workoutDate}>{formatDate(item.start_time)}</Text>
+            <Text style={styles.workoutMeta}>
+              {item.exerciseCount} exercise{item.exerciseCount !== 1 ? 's' : ''} · {item.totalSets} set{item.totalSets !== 1 ? 's' : ''}
+            </Text>
+          </View>
+          <View style={styles.workoutCardRight}>
+            <Text style={styles.workoutDuration}>{formatDuration(item.start_time, item.end_time)}</Text>
+            <Text style={styles.workoutVolume}>{item.totalVolume.toLocaleString()} kg</Text>
+          </View>
+        </View>
+
+        {/* Exercise Details */}
+        {visibleExercises.length > 0 && (
+          <View style={styles.exerciseList}>
+            {visibleExercises.map((ex, idx) => (
+              <View key={idx} style={styles.exerciseRow}>
+                <Text style={styles.exerciseName}>{ex.name}</Text>
+                <View style={styles.setsRow}>
+                  {ex.sets.map((set, si) => (
+                    <View key={si} style={styles.setChip}>
+                      <Text style={styles.setChipText}>
+                        {set.weight > 0 ? `${set.weight}kg` : 'BW'} × {set.reps}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+            {hiddenCount > 0 && (
+              <Text style={styles.moreBadge}>+{hiddenCount} more exercise{hiddenCount > 1 ? 's' : ''}</Text>
+            )}
+          </View>
+        )}
       </View>
-      <View style={styles.workoutCardRight}>
-        <Text style={styles.workoutDuration}>{formatDuration(item.start_time, item.end_time)}</Text>
-        <Text style={styles.workoutVolume}>{item.totalVolume.toLocaleString()} kg</Text>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -363,11 +422,14 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 16,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#222222',
+  },
+  workoutCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#222222',
+    marginBottom: 0,
   },
   workoutCardLeft: {},
   workoutDate: {
@@ -392,6 +454,45 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#888888',
     marginTop: 4,
+  },
+  exerciseList: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#2A2A2A',
+    gap: 10,
+  },
+  exerciseRow: {
+    gap: 6,
+  },
+  exerciseName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#CCCCCC',
+  },
+  setsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  setChip: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  setChipText: {
+    fontSize: 12,
+    color: '#39FF14',
+    fontWeight: '500',
+  },
+  moreBadge: {
+    fontSize: 12,
+    color: '#666666',
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   emptyState: {
     backgroundColor: '#1A1A1A',
