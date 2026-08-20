@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
 type WorkoutSet = {
@@ -27,7 +27,9 @@ type RecentWorkout = {
 export default function HomeScreen() {
   const router = useRouter();
   const [recentWorkouts, setRecentWorkouts] = useState<RecentWorkout[]>([]);
-  const [totalWorkouts, setTotalWorkouts] = useState(0);
+  const [currentStreak, setCurrentStreak] = useState(0);
+  const [longestStreak, setLongestStreak] = useState(0);
+  const [workoutsLast7Days, setWorkoutsLast7Days] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
@@ -43,13 +45,75 @@ export default function HomeScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { count } = await supabase
+      // Fetch all workout times to calculate streaks & 7 day volume
+      const { data: allWorkouts } = await supabase
         .from('workouts')
-        .select('*', { count: 'exact', head: true })
+        .select('start_time')
         .eq('user_id', user.id)
-        .not('end_time', 'is', null);
+        .not('end_time', 'is', null)
+        .order('start_time', { ascending: false });
 
-      setTotalWorkouts(count || 0);
+      if (allWorkouts && allWorkouts.length > 0) {
+        const today = new Date();
+        const todayNormalized = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+        const yesterdayNormalized = todayNormalized - 86400000;
+        
+        const dates = allWorkouts.map(w => {
+          const d = new Date(w.start_time);
+          return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        });
+        
+        const uniqueDatesDesc = Array.from(new Set(dates));
+        uniqueDatesDesc.sort((a, b) => b - a);
+
+        let streak = 0;
+        let expectedDate = todayNormalized;
+
+        if (uniqueDatesDesc[0] === todayNormalized) {
+          streak = 1;
+          expectedDate = yesterdayNormalized;
+        } else if (uniqueDatesDesc[0] === yesterdayNormalized) {
+          streak = 1;
+          expectedDate = yesterdayNormalized - 86400000;
+        }
+
+        if (streak > 0) {
+          for (let i = 1; i < uniqueDatesDesc.length; i++) {
+            if (uniqueDatesDesc[i] === expectedDate) {
+              streak++;
+              expectedDate -= 86400000;
+            } else {
+              break;
+            }
+          }
+        }
+        setCurrentStreak(streak);
+
+        let maxStreak = 0;
+        if (uniqueDatesDesc.length > 0) {
+          let currentLoopStreak = 1;
+          for (let i = 0; i < uniqueDatesDesc.length - 1; i++) {
+            if (uniqueDatesDesc[i] - uniqueDatesDesc[i+1] === 86400000) {
+              currentLoopStreak++;
+            } else {
+              if (currentLoopStreak > maxStreak) maxStreak = currentLoopStreak;
+              currentLoopStreak = 1;
+            }
+          }
+          if (currentLoopStreak > maxStreak) maxStreak = currentLoopStreak;
+          setLongestStreak(maxStreak);
+        } else {
+          setLongestStreak(0);
+        }
+
+        const sevenDaysAgo = today.getTime() - (7 * 86400000);
+        const last7DaysCount = allWorkouts.filter(w => new Date(w.start_time).getTime() >= sevenDaysAgo).length;
+        setWorkoutsLast7Days(last7DaysCount);
+      } else {
+        setCurrentStreak(0);
+        setLongestStreak(0);
+        setWorkoutsLast7Days(0);
+      }
 
       const { data: workouts } = await supabase
         .from('workouts')
@@ -131,6 +195,29 @@ export default function HomeScreen() {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const handleDeleteWorkout = (workoutId: string) => {
+    Alert.alert(
+      "Delete Workout",
+      "Are you sure you want to delete this workout?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const { error } = await supabase.from('workouts').delete().eq('id', workoutId);
+              if (error) throw error;
+              setRecentWorkouts(prev => prev.filter(w => w.id !== workoutId));
+            } catch (error: any) {
+              Alert.alert("Error", error.message || "Failed to delete workout.");
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const renderWorkoutItem = ({ item }: { item: RecentWorkout }) => {
     const visibleExercises = item.exercises.slice(0, 3);
     const hiddenCount = item.exercises.length - visibleExercises.length;
@@ -138,16 +225,24 @@ export default function HomeScreen() {
     return (
       <View style={styles.workoutCard}>
         {/* Header Row */}
-        <View style={styles.workoutCardHeader}>
-          <View style={styles.workoutCardLeft}>
-            <Text style={styles.workoutDate}>{formatDate(item.start_time)}</Text>
-            <Text style={styles.workoutMeta}>
+        <View className="flex-row justify-between items-start mb-2">
+          <View>
+            <Text className="text-base font-semibold text-white">{formatDate(item.start_time)}</Text>
+            <Text className="text-[13px] text-[#888888] mt-1">
               {item.exerciseCount} exercise{item.exerciseCount !== 1 ? 's' : ''} · {item.totalSets} set{item.totalSets !== 1 ? 's' : ''}
             </Text>
           </View>
-          <View style={styles.workoutCardRight}>
-            <Text style={styles.workoutDuration}>{formatDuration(item.start_time, item.end_time)}</Text>
-            <Text style={styles.workoutVolume}>{item.totalVolume.toLocaleString()} kg</Text>
+          <View className="flex-row items-center gap-2">
+            <View className="items-end">
+              <Text className="text-base font-semibold text-[#39FF14]">{formatDuration(item.start_time, item.end_time)}</Text>
+              <Text className="text-[13px] text-[#888888] mt-1">{item.totalVolume.toLocaleString()} kg</Text>
+            </View>
+            <Pressable 
+              onPress={() => handleDeleteWorkout(item.id)}
+              className="bg-red-500/10 p-2 rounded-lg ml-1"
+            >
+              <Text className="text-red-500 text-sm">🗑️</Text>
+            </Pressable>
           </View>
         </View>
 
@@ -192,22 +287,18 @@ export default function HomeScreen() {
       </View>
 
       {/* Stats Row */}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>{totalWorkouts}</Text>
-          <Text style={styles.statLabel}>Workouts</Text>
+      <View className="flex-row gap-3 mb-6">
+        <View className="flex-1 bg-[#1A1A1A] rounded-2xl p-4 items-center border border-[#1E1E1E]">
+          <Text className="text-[22px] font-bold text-[#39FF14]">{currentStreak}</Text>
+          <Text className="text-xs text-[#888888] mt-1 text-center">Current Streak</Text>
         </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>
-            {recentWorkouts.length > 0 ? formatDuration(recentWorkouts[0].start_time, recentWorkouts[0].end_time) : '--'}
-          </Text>
-          <Text style={styles.statLabel}>Last Duration</Text>
+        <View className="flex-1 bg-[#1A1A1A] rounded-2xl p-4 items-center border border-[#1E1E1E]">
+          <Text className="text-[22px] font-bold text-[#39FF14]">{longestStreak}</Text>
+          <Text className="text-xs text-[#888888] mt-1 text-center">Longest Streak</Text>
         </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statNumber}>
-            {recentWorkouts.length > 0 ? `${(recentWorkouts[0].totalVolume / 1000).toFixed(1)}k` : '--'}
-          </Text>
-          <Text style={styles.statLabel}>Last Volume</Text>
+        <View className="flex-1 bg-[#1A1A1A] rounded-2xl p-4 items-center border border-[#1E1E1E]">
+          <Text className="text-[22px] font-bold text-[#39FF14]">{workoutsLast7Days}</Text>
+          <Text className="text-[11px] text-[#888888] mt-1 text-center leading-tight">Workouts in last 7 days</Text>
         </View>
       </View>
 
@@ -337,30 +428,7 @@ const styles = StyleSheet.create({
     color: '#39FF14',
     fontWeight: 'bold',
   },
-  statsRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 24,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#1E1E1E',
-  },
-  statNumber: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#39FF14',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 4,
-  },
+
   addWorkoutBtn: {
     backgroundColor: '#141414',
     borderRadius: 20,
@@ -425,36 +493,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#222222',
   },
-  workoutCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 0,
-  },
-  workoutCardLeft: {},
-  workoutDate: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  workoutMeta: {
-    fontSize: 13,
-    color: '#888888',
-    marginTop: 4,
-  },
-  workoutCardRight: {
-    alignItems: 'flex-end',
-  },
-  workoutDuration: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#39FF14',
-  },
-  workoutVolume: {
-    fontSize: 13,
-    color: '#888888',
-    marginTop: 4,
-  },
+
   exerciseList: {
     marginTop: 12,
     paddingTop: 12,

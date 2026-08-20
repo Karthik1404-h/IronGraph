@@ -1,6 +1,6 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
 
@@ -314,12 +314,17 @@ export default function WeightScreen() {
   };
 
   return (
-    <FlatList
-      style={styles.container}
-      contentContainerStyle={styles.scrollContent}
-      data={processedLogs}
-      keyExtractor={(item) => item.id}
-      showsVerticalScrollIndicator={false}
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <FlatList
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        data={processedLogs}
+        keyExtractor={(item) => item.id}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       ListHeaderComponent={
         <>
           <Text style={styles.headerTitle}>Track Weight</Text>
@@ -416,6 +421,7 @@ export default function WeightScreen() {
         )
       }
     />
+    </KeyboardAvoidingView>
   );
 }
 

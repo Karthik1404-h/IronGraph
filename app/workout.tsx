@@ -501,7 +501,7 @@ export default function WorkoutScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       {/* Top Bar */}
       <View style={styles.topBar}>
@@ -521,7 +521,7 @@ export default function WorkoutScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <View style={styles.sessionHeader}>
           <Text style={styles.categoryTitle}>{category} Workout</Text>
           <Text style={styles.categorySub}>Log your weights and reps below</Text>

@@ -263,17 +263,6 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          <View style={styles.statsCard}>
-            <View style={styles.statRow}>
-              <Text style={styles.statLabel}>Total Workouts</Text>
-              <Text style={styles.statValue}>0</Text>
-            </View>
-            <View style={[styles.statRow, { marginBottom: 0 }]}>
-              <Text style={styles.statLabel}>Active Streak</Text>
-              <Text style={styles.statValue}>0 Days</Text>
-            </View>
-          </View>
-
           <Text style={styles.sectionTitle}>My Friends</Text>
         </>
       }
@@ -418,31 +407,7 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
   },
-  statsCard: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 5,
-  },
-  statRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  statLabel: {
-    color: '#A0A0A0',
-    fontSize: 16,
-  },
-  statValue: {
-    color: '#39FF14',
-    fontWeight: '600',
-    fontSize: 18,
-  },
+
   sectionTitle: {
     fontSize: 20,
     fontWeight: '600',
