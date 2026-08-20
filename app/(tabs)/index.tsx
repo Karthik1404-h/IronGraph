@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View, ScrollView, RefreshControl } from 'react-native';
 import { supabase } from '../../lib/supabase';
 
 type WorkoutSet = {
@@ -32,6 +32,16 @@ export default function HomeScreen() {
   const [workoutsLast7Days, setWorkoutsLast7Days] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchDashboardData();
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -233,6 +243,12 @@ export default function HomeScreen() {
             </Text>
           </View>
           <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={() => router.push({ pathname: '/workout', params: { editWorkoutId: item.id } })}
+              className="bg-blue-500/10 p-2 rounded-lg"
+            >
+              <Text className="text-blue-400 text-sm">✏️</Text>
+            </Pressable>
             <Pressable 
               onPress={() => handleDeleteWorkout(item.id)}
               className="bg-red-500/10 p-2 rounded-lg ml-1"
@@ -269,7 +285,11 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Home</Text>
@@ -327,12 +347,13 @@ export default function HomeScreen() {
             </Text>
           </View>
         ) : (
-          <FlatList
-            data={recentWorkouts}
-            keyExtractor={(item) => item.id}
-            renderItem={renderWorkoutItem}
-            showsVerticalScrollIndicator={false}
-          />
+          <View style={{ gap: 12 }}>
+            {recentWorkouts.map(item => (
+              <View key={item.id}>
+                {renderWorkoutItem({ item })}
+              </View>
+            ))}
+          </View>
         )}
       </View>
 
@@ -381,7 +402,7 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
 

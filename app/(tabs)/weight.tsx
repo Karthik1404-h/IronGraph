@@ -1,6 +1,6 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View, RefreshControl } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
 
@@ -58,6 +58,16 @@ export default function WeightScreen() {
   const [realLogs, setRealLogs] = useState<WeightLog[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(true);
   const [horizon, setHorizon] = useState<TimeHorizon>('Daily');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchLogs();
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -315,16 +325,16 @@ export default function WeightScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <FlatList
-        style={styles.container}
-        contentContainerStyle={styles.scrollContent}
-        data={processedLogs}
-        keyExtractor={(item) => item.id}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+    <FlatList
+      data={USE_MOCK_DATA ? [] : processedLogs}
+      keyExtractor={item => item.id}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
       ListHeaderComponent={
         <>
           <Text style={styles.headerTitle}>Track Weight</Text>
@@ -397,14 +407,14 @@ export default function WeightScreen() {
             />
 
             <Pressable
-              style={({ pressed }) => (pressed || isSubmitting) ? [styles.button, styles.buttonPressed] : styles.button}
+              className="bg-[#39FF14] px-4 py-3 rounded-xl items-center mt-4"
               onPress={handleLogWeight}
               disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <ActivityIndicator color="#000000" />
               ) : (
-                <Text style={styles.buttonText}>Log Weight</Text>
+                <Text className="text-black font-bold text-base">Log Weight</Text>
               )}
             </Pressable>
           </View>

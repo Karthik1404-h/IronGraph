@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { StyleSheet, Text, View, Pressable, Alert, FlatList, ActivityIndicator, Image, TextInput } from 'react-native';
+import { StyleSheet, Text, View, Pressable, Alert, FlatList, ActivityIndicator, Image, TextInput, RefreshControl } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase';
@@ -24,6 +24,16 @@ export default function ProfileScreen() {
   const [isUploading, setIsUploading] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchData();
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -200,9 +210,9 @@ export default function ProfileScreen() {
       <Text style={styles.friendName}>{item.profile.display_name || item.profile.email}</Text>
       <Pressable 
         onPress={() => handleRemoveFriend(item.friendshipId, item.profile.display_name || item.profile.email)}
-        style={({ pressed }) => pressed ? [styles.removeBtn, { opacity: 0.7 }] : styles.removeBtn}
+        className="bg-red-500/15 px-3 py-1.5 rounded-lg ml-2"
       >
-        <Text style={styles.removeBtnText}>Remove</Text>
+        <Text className="text-red-500 font-medium text-sm">Remove</Text>
       </Pressable>
     </View>
   );
@@ -214,6 +224,7 @@ export default function ProfileScreen() {
       data={friends}
       keyExtractor={(item) => item.friendshipId}
       showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
       ListHeaderComponent={
         <>
           <View style={styles.profileHeader}>
@@ -276,10 +287,10 @@ export default function ProfileScreen() {
       }
       ListFooterComponent={
         <Pressable 
-          style={({ pressed }) => pressed ? [styles.logoutButton, styles.logoutButtonPressed] : styles.logoutButton}
+          className="bg-red-500 px-4 py-3 rounded-xl items-center mt-6"
           onPress={handleLogout}
         >
-          <Text style={styles.logoutButtonText}>Log Out</Text>
+          <Text className="text-white font-bold text-base">Log Out</Text>
         </Pressable>
       }
     />

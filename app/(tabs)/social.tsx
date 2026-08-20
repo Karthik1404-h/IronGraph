@@ -1,6 +1,6 @@
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View, RefreshControl } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
 
@@ -55,6 +55,16 @@ export default function SocialScreen() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<TimeHorizon>('Daily');
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchData(() => true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -518,6 +528,7 @@ export default function SocialScreen() {
     <View style={styles.container}>
       <FlatList
         style={styles.container}
+        refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
         contentContainerStyle={styles.scrollContent}
         data={leaderboard}
         keyExtractor={(item) => item.id}

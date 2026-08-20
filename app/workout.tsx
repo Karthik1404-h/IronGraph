@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet, Text, View, Pressable, TextInput, FlatList,
   Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform, BackHandler
@@ -55,8 +55,7 @@ export default function WorkoutScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [workoutId, setWorkoutId] = useState<string | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const editWorkoutId = params.editWorkoutId as string | undefined;
 
   const [summaryData, setSummaryData] = useState<{
     duration: string;
@@ -77,15 +76,56 @@ export default function WorkoutScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
-        await startWorkoutSession(user.id);
+        if (!editWorkoutId) {
+          await startWorkoutSession(user.id);
+        }
         await loadExercises(user.id, category);
       }
     };
     init();
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
   }, [category]);
+
+  // Hydrate state when editing an existing workout
+  useEffect(() => {
+    if (!editWorkoutId) return;
+    const hydrateWorkout = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch workout_sets joined with exercise data
+        const { data: sets, error } = await supabase
+          .from('workout_sets')
+          .select('*, exercises(*)')
+          .eq('workout_id', editWorkoutId)
+          .order('set_number', { ascending: true });
+
+        if (error) throw error;
+        if (!sets || sets.length === 0) return;
+
+        // Group sets by exercise
+        const exerciseMap = new Map<string, SelectedExercise>();
+        for (const s of sets) {
+          const ex: Exercise = s.exercises;
+          if (!exerciseMap.has(ex.id)) {
+            exerciseMap.set(ex.id, { exercise: ex, sets: [], pr: null });
+          }
+          exerciseMap.get(ex.id)!.sets.push({
+            set_number: s.set_number,
+            weight: String(s.weight ?? ''),
+            reps: String(s.reps ?? ''),
+            logged: true,
+            loggedAt: s.created_at,
+          });
+        }
+        setSelectedExercises(Array.from(exerciseMap.values()));
+        setWorkoutId(editWorkoutId);
+      } catch (err: any) {
+        Alert.alert('Error', err.message || 'Failed to load workout for editing.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    hydrateWorkout();
+  }, [editWorkoutId]);
 
 
 
@@ -99,10 +139,6 @@ export default function WorkoutScreen() {
 
       if (error || !workout) throw error || new Error('Failed to create workout');
       setWorkoutId(workout.id);
-
-      timerRef.current = setInterval(() => {
-        setElapsedSeconds(prev => prev + 1);
-      }, 1000);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to start workout session.');
     }
@@ -226,7 +262,6 @@ export default function WorkoutScreen() {
   };
 
   const saveAndExit = async () => {
-    if (timerRef.current) clearInterval(timerRef.current);
     if (!workoutId || !userId) {
       router.back();
       return;
@@ -251,7 +286,6 @@ export default function WorkoutScreen() {
     }
 
     if (setsToSave.length === 0) {
-      // Nothing was explicitly logged — discard the empty session
       await supabase.from('workouts').delete().eq('id', workoutId);
       router.back();
       return;
@@ -302,6 +336,27 @@ export default function WorkoutScreen() {
         return;
       }
 
+      if (editWorkoutId) {
+        // EDIT MODE: delete-and-reinsert to avoid orphaned sets
+        const { error: deleteErr } = await supabase
+          .from('workout_sets')
+          .delete()
+          .eq('workout_id', editWorkoutId);
+        if (deleteErr) throw deleteErr;
+
+        const { error: insertErr } = await supabase.from('workout_sets').insert(allSets);
+        if (insertErr) throw insertErr;
+
+        await supabase
+          .from('workouts')
+          .update({ end_time: new Date().toISOString() })
+          .eq('id', editWorkoutId);
+
+        router.back();
+        return;
+      }
+
+      // NEW WORKOUT MODE
       const { error } = await supabase.from('workout_sets').insert(allSets);
       if (error) throw error;
 
@@ -310,8 +365,6 @@ export default function WorkoutScreen() {
         .update({ end_time: new Date().toISOString() })
         .eq('id', workoutId);
       if (updateErr) throw updateErr;
-
-      if (timerRef.current) clearInterval(timerRef.current);
 
       // Compute new PRs
       const newPRs: string[] = [];
@@ -331,8 +384,6 @@ export default function WorkoutScreen() {
 
       const totalVolume = allSets.reduce((sum, s) => sum + (s.weight * s.reps), 0);
       const uniqueExercises = new Set(allSets.map(s => s.exercise_id));
-      const mins = Math.floor(elapsedSeconds / 60);
-      const secs = elapsedSeconds % 60;
 
       const exerciseBreakdown = selectedExercises.map(se => ({
         name: se.exercise.name,
@@ -347,12 +398,12 @@ export default function WorkoutScreen() {
       })).filter(e => e.sets.length > 0);
 
       setSummaryData({
-        duration: `${mins}m ${secs}s`,
+        duration: '--',
         totalSets: allSets.length,
         totalVolume,
         exerciseCount: uniqueExercises.size,
         newPRs,
-        startTime: new Date(Date.now() - elapsedSeconds * 1000).toISOString(),
+        startTime: new Date().toISOString(),
         exercises: exerciseBreakdown,
       });
       setIsFinished(true);
@@ -373,8 +424,8 @@ export default function WorkoutScreen() {
           text: "Discard", 
           style: "destructive", 
           onPress: async () => {
-            if (timerRef.current) clearInterval(timerRef.current);
-            if (workoutId) {
+            if (!editWorkoutId && workoutId) {
+              // Only delete the session row if it was freshly created (not editing)
               await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
               await supabase.from('workouts').delete().eq('id', workoutId);
             }
@@ -394,8 +445,7 @@ export default function WorkoutScreen() {
         { text: 'Save & Exit', onPress: saveAndExit },
         {
           text: 'Discard', style: 'destructive', onPress: async () => {
-            if (timerRef.current) clearInterval(timerRef.current);
-            if (workoutId) {
+            if (!editWorkoutId && workoutId) {
               await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
               await supabase.from('workouts').delete().eq('id', workoutId);
             }
@@ -528,12 +578,15 @@ export default function WorkoutScreen() {
     >
       {/* Top Bar */}
       <View className="flex-row justify-between items-center px-4 py-3 border-b border-[#1A1A1A]">
-        <Pressable onPress={handleCancelWorkout}>
-          <Text className="text-red-500 font-medium text-base">Cancel</Text>
+        <Pressable
+          onPress={handleCancelWorkout}
+          className="bg-red-500 px-4 py-2 rounded-full"
+        >
+          <Text className="text-white font-bold text-base">Cancel</Text>
         </Pressable>
-        <View style={styles.timerContainer}>
-          <Text style={styles.timerText}>⏱️ {formatTimer(elapsedSeconds)}</Text>
-        </View>
+        <Text className="text-white font-semibold text-base">
+          {editWorkoutId ? 'Edit Workout' : `${category} Workout`}
+        </Text>
         <Pressable
           onPress={finishWorkout}
           className="bg-[#39FF14] px-4 py-2 rounded-full"

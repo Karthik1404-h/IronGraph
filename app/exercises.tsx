@@ -274,18 +274,14 @@ export default function ExerciseManagementScreen() {
             onSubmitEditing={handleAddExercise}
           />
           <Pressable
-            style={({ pressed }) => [
-              styles.submitBtn,
-              (isSubmitting || !newExerciseName.trim()) && { opacity: 0.5 },
-              pressed && { transform: [{ scale: 0.96 }] }
-            ]}
+            className={`bg-[#39FF14] px-4 py-3 rounded-xl items-center ml-2 ${(isSubmitting || !newExerciseName.trim()) ? 'opacity-50' : ''}`}
             onPress={handleAddExercise}
             disabled={isSubmitting || !newExerciseName.trim()}
           >
             {isSubmitting ? (
               <ActivityIndicator color="#0A0A0A" size="small" />
             ) : (
-              <Text style={styles.submitBtnText}>Add</Text>
+              <Text className="text-black font-bold text-base">Add</Text>
             )}
           </Pressable>
         </View>
