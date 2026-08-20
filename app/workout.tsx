@@ -48,6 +48,7 @@ export default function WorkoutScreen() {
   const [availableExercises, setAvailableExercises] = useState<Exercise[]>([]);
   const [selectedExercises, setSelectedExercises] = useState<SelectedExercise[]>([]);
   const [showExerciseModal, setShowExerciseModal] = useState(false);
+  const [exerciseSearchQuery, setExerciseSearchQuery] = useState('');
   const [showWeightPickerModal, setShowWeightPickerModal] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<{ exIdx: number; setIdx: number } | null>(null);
 
@@ -362,6 +363,28 @@ export default function WorkoutScreen() {
     }
   };
 
+  const handleCancelWorkout = () => {
+    Alert.alert(
+      "Cancel Workout?",
+      "Are you sure? All unsaved progress will be lost.",
+      [
+        { text: "Resume", style: "cancel" },
+        { 
+          text: "Discard", 
+          style: "destructive", 
+          onPress: async () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+            if (workoutId) {
+              await supabase.from('workout_sets').delete().eq('workout_id', workoutId);
+              await supabase.from('workouts').delete().eq('id', workoutId);
+            }
+            router.back();
+          } 
+        }
+      ]
+    );
+  };
+
   const handleClose = useCallback(() => {
     Alert.alert(
       'Exit Workout?',
@@ -504,20 +527,18 @@ export default function WorkoutScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       {/* Top Bar */}
-      <View style={styles.topBar}>
-        <Pressable onPress={handleClose} style={styles.closeBtnContainer}>
-          <Text style={styles.closeBtn}>✕</Text>
+      <View className="flex-row justify-between items-center px-4 py-3 border-b border-[#1A1A1A]">
+        <Pressable onPress={handleCancelWorkout}>
+          <Text className="text-red-500 font-medium text-base">Cancel</Text>
         </Pressable>
         <View style={styles.timerContainer}>
           <Text style={styles.timerText}>⏱️ {formatTimer(elapsedSeconds)}</Text>
         </View>
         <Pressable
-          style={({ pressed }) =>
-            pressed ? [styles.finishBtn, { opacity: 0.8 }] : styles.finishBtn
-          }
           onPress={finishWorkout}
+          className="bg-[#39FF14] px-4 py-2 rounded-full"
         >
-          <Text style={styles.finishBtnText}>✓ Finish</Text>
+          <Text className="text-black font-bold text-base">Save</Text>
         </Pressable>
       </View>
 
@@ -634,7 +655,7 @@ export default function WorkoutScreen() {
               </View>
             ))}
 
-            {/* Add Set + Save row */}
+            {/* Add Set row */}
             <View style={styles.cardActionsRow}>
               <Pressable
                 style={({ pressed }) =>
@@ -643,15 +664,6 @@ export default function WorkoutScreen() {
                 onPress={() => addSet(exIdx)}
               >
                 <Text style={styles.addSetText}>＋ Add Set</Text>
-              </Pressable>
-
-              <Pressable
-                style={({ pressed }) =>
-                  pressed ? [styles.saveBtn, { opacity: 0.8 }] : styles.saveBtn
-                }
-                onPress={finishWorkout}
-              >
-                <Text style={styles.saveBtnText}>✓ Save</Text>
               </Pressable>
             </View>
           </View>
@@ -684,27 +696,36 @@ export default function WorkoutScreen() {
               </Pressable>
             </View>
 
+            <TextInput
+              className="bg-[#1A1A1A] border border-[#1E1E1E] text-white px-4 py-3 rounded-xl mb-4 placeholder-[#888888]"
+              placeholder="Search exercises..."
+              placeholderTextColor="#888888"
+              value={exerciseSearchQuery}
+              onChangeText={setExerciseSearchQuery}
+            />
+
             <FlatList
-              data={availableExercises}
+              data={availableExercises.filter(ex => ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase()))}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingBottom: 20 }}
               renderItem={({ item }) => {
                 const isAlreadyIn = selectedExercises.some(se => se.exercise.id === item.id);
                 return (
                   <Pressable
-                    style={({ pressed }) => [
-                      styles.exerciseSelectItem,
-                      isAlreadyIn && { opacity: 0.4 },
-                      pressed && { backgroundColor: '#1E1E1E' }
-                    ]}
+                    className={`bg-[#1A1A1A] p-4 rounded-xl mb-3 flex-row justify-between items-center ${isAlreadyIn ? 'opacity-40' : ''}`}
+                    style={({ pressed }) => pressed && !isAlreadyIn ? { opacity: 0.8 } : {}}
                     onPress={() => handleSelectExerciseToAdd(item)}
                     disabled={isAlreadyIn}
                   >
-                    <Text style={[styles.exerciseSelectText, isAlreadyIn && { color: '#666' }]}>{item.name}</Text>
+                    <Text className={`text-base font-medium ${isAlreadyIn ? 'text-[#666666]' : 'text-white'}`}>
+                      {item.name}
+                    </Text>
                     {isAlreadyIn ? (
                       <Text style={styles.addedBadgeText}>Added</Text>
                     ) : (
-                      <Text style={styles.addArrowText}>＋</Text>
+                      <View className="bg-[#39FF14]/10 w-8 h-8 rounded-lg items-center justify-center">
+                        <Text className="text-[#39FF14] font-bold text-lg leading-tight">+</Text>
+                      </View>
                     )}
                   </Pressable>
                 );

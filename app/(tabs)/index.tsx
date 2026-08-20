@@ -233,10 +233,6 @@ export default function HomeScreen() {
             </Text>
           </View>
           <View className="flex-row items-center gap-2">
-            <View className="items-end">
-              <Text className="text-base font-semibold text-[#39FF14]">{formatDuration(item.start_time, item.end_time)}</Text>
-              <Text className="text-[13px] text-[#888888] mt-1">{item.totalVolume.toLocaleString()} kg</Text>
-            </View>
             <Pressable 
               onPress={() => handleDeleteWorkout(item.id)}
               className="bg-red-500/10 p-2 rounded-lg ml-1"
