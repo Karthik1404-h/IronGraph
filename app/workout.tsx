@@ -43,7 +43,7 @@ const DEFAULT_CALISTHENICS: string[] = [
 export default function WorkoutScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const category = (params.category as 'Gym' | 'Calisthenics') || 'Gym';
+  const [activeCategory, setActiveCategory] = useState<'All' | 'Gym' | 'Calisthenics'>('All');
 
   const [availableExercises, setAvailableExercises] = useState<Exercise[]>([]);
   const [selectedExercises, setSelectedExercises] = useState<SelectedExercise[]>([]);
@@ -79,11 +79,11 @@ export default function WorkoutScreen() {
         if (!editWorkoutId) {
           await startWorkoutSession(user.id);
         }
-        await loadExercises(user.id, category);
+        await loadExercises(user.id);
       }
     };
     init();
-  }, [category]);
+  }, []);
 
   // Hydrate state when editing an existing workout
   useEffect(() => {
@@ -144,19 +144,19 @@ export default function WorkoutScreen() {
     }
   };
 
-  const loadExercises = async (uid: string, cat: 'Gym' | 'Calisthenics') => {
+  const loadExercises = async (uid: string) => {
     try {
       const { data, error } = await supabase
         .from('exercises')
         .select('*')
         .eq('user_id', uid)
-        .eq('category', cat)
         .order('name', { ascending: true });
 
       if (error) throw error;
       if (!data || data.length === 0) {
-        const defaults = cat === 'Gym' ? DEFAULT_GYM : DEFAULT_CALISTHENICS;
-        const rows = defaults.map(name => ({ user_id: uid, name, category: cat }));
+        const rowsGym = DEFAULT_GYM.map(name => ({ user_id: uid, name, category: 'Gym' }));
+        const rowsCali = DEFAULT_CALISTHENICS.map(name => ({ user_id: uid, name, category: 'Calisthenics' }));
+        const rows = [...rowsGym, ...rowsCali];
         const { data: inserted } = await supabase.from('exercises').insert(rows).select('*');
         setAvailableExercises(inserted || []);
       } else {
@@ -585,7 +585,7 @@ export default function WorkoutScreen() {
           <Text className="text-white font-bold text-base">Cancel</Text>
         </Pressable>
         <Text className="text-white font-semibold text-base">
-          {editWorkoutId ? 'Edit Workout' : `${category} Workout`}
+          {editWorkoutId ? 'Edit Workout' : 'New Workout'}
         </Text>
         <Pressable
           onPress={finishWorkout}
@@ -597,7 +597,7 @@ export default function WorkoutScreen() {
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <View style={styles.sessionHeader}>
-          <Text style={styles.categoryTitle}>{category} Workout</Text>
+          <Text style={styles.categoryTitle}>Workout Session</Text>
           <Text style={styles.categorySub}>Log your weights and reps below</Text>
         </View>
 
@@ -743,9 +743,22 @@ export default function WorkoutScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select {category} Exercise</Text>
+              <Text style={styles.modalTitle}>Select Exercise</Text>
               <Pressable onPress={() => setShowExerciseModal(false)} style={styles.modalCloseBtn}>
                 <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
+            </View>
+
+            {/* Segmented Control */}
+            <View style={{ flexDirection: 'row', backgroundColor: '#1A1A1A', borderRadius: 12, padding: 4, marginBottom: 12, borderWidth: 1, borderColor: '#222222' }}>
+              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'All' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('All')}>
+                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'All' ? 'bold' : '600', color: activeCategory === 'All' ? '#0A0A0A' : '#888888' }}>All</Text>
+              </Pressable>
+              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'Gym' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('Gym')}>
+                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'Gym' ? 'bold' : '600', color: activeCategory === 'Gym' ? '#0A0A0A' : '#888888' }}>Gym</Text>
+              </Pressable>
+              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'Calisthenics' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('Calisthenics')}>
+                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'Calisthenics' ? 'bold' : '600', color: activeCategory === 'Calisthenics' ? '#0A0A0A' : '#888888' }}>Cali</Text>
               </Pressable>
             </View>
 
@@ -758,7 +771,10 @@ export default function WorkoutScreen() {
             />
 
             <FlatList
-              data={availableExercises.filter(ex => ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase()))}
+              data={availableExercises.filter(ex => 
+                (activeCategory === 'All' || ex.category === activeCategory) &&
+                ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())
+              )}
               keyExtractor={item => item.id}
               contentContainerStyle={{ paddingBottom: 20 }}
               renderItem={({ item }) => {
@@ -770,9 +786,12 @@ export default function WorkoutScreen() {
                     onPress={() => handleSelectExerciseToAdd(item)}
                     disabled={isAlreadyIn}
                   >
-                    <Text className={`text-base font-medium ${isAlreadyIn ? 'text-[#666666]' : 'text-white'}`}>
-                      {item.name}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 12 }}>
+                      <Text style={{ fontSize: 16, marginRight: 8 }}>{item.category === 'Gym' ? '🏋️' : '🤸'}</Text>
+                      <Text className={`text-base font-medium flex-shrink ${isAlreadyIn ? 'text-[#666666]' : 'text-white'}`}>
+                        {item.name}
+                      </Text>
+                    </View>
                     {isAlreadyIn ? (
                       <Text style={styles.addedBadgeText}>Added</Text>
                     ) : (

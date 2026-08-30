@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { StyleSheet, Text, View, Pressable, Alert, FlatList, ActivityIndicator, Image, TextInput, RefreshControl } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase';
 
@@ -17,6 +17,7 @@ type FriendItem = {
 };
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [friends, setFriends] = useState<FriendItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -227,6 +228,16 @@ export default function ProfileScreen() {
       refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
       ListHeaderComponent={
         <>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#FFFFFF' }}>Profile</Text>
+            <Pressable
+              style={({ pressed }) => pressed ? [styles.manageLink, { opacity: 0.6 }] : styles.manageLink}
+              onPress={() => router.push('/exercises')}
+            >
+              <Text style={styles.manageLinkText}>Manage Exercises</Text>
+              <Text style={styles.manageLinkArrow}>›</Text>
+            </Pressable>
+          </View>
           <View style={styles.profileHeader}>
             <Pressable onPress={handlePickImage} style={styles.avatarContainer}>
               {isUploading ? (
@@ -305,7 +316,28 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 24,
     paddingTop: 60,
-    paddingBottom: 40,
+    paddingBottom: 120,
+  },
+  manageLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#1A1A1A',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  manageLinkText: {
+    fontSize: 13,
+    color: '#39FF14',
+    fontWeight: '600',
+  },
+  manageLinkArrow: {
+    fontSize: 16,
+    color: '#39FF14',
+    fontWeight: 'bold',
   },
   profileHeader: {
     alignItems: 'center',

@@ -11,6 +11,7 @@ type WorkoutSet = {
 
 type WorkoutExercise = {
   name: string;
+  category: 'Gym' | 'Calisthenics';
   sets: WorkoutSet[];
 };
 
@@ -31,7 +32,6 @@ export default function HomeScreen() {
   const [longestStreak, setLongestStreak] = useState(0);
   const [workoutsLast7Days, setWorkoutsLast7Days] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
@@ -138,7 +138,7 @@ export default function HomeScreen() {
         for (const w of workouts) {
           const { data: sets } = await supabase
             .from('workout_sets')
-            .select('exercise_id, weight, reps, set_number, exercises(name)')
+            .select('exercise_id, weight, reps, set_number, exercises(name, category)')
             .eq('workout_id', w.id)
             .order('set_number', { ascending: true });
 
@@ -149,8 +149,9 @@ export default function HomeScreen() {
           const exerciseMap = new Map<string, WorkoutExercise>();
           for (const s of (sets || []) as any[]) {
             const exName: string = s.exercises?.name || 'Unknown Exercise';
+            const exCategory: 'Gym' | 'Calisthenics' = s.exercises?.category || 'Gym';
             if (!exerciseMap.has(exName)) {
-              exerciseMap.set(exName, { name: exName, sets: [] });
+              exerciseMap.set(exName, { name: exName, category: exCategory, sets: [] });
             }
             exerciseMap.get(exName)!.sets.push({
               weight: Number(s.weight),
@@ -178,11 +179,6 @@ export default function HomeScreen() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleCategorySelect = (category: 'Gym' | 'Calisthenics') => {
-    setShowCategoryPicker(false);
-    router.push(`/workout?category=${category}`);
   };
 
   const formatDuration = (start: string, end: string | null) => {
@@ -232,6 +228,13 @@ export default function HomeScreen() {
     const visibleExercises = item.exercises.slice(0, 3);
     const hiddenCount = item.exercises.length - visibleExercises.length;
 
+    // Group visible exercises by category
+    const groupedVisible = visibleExercises.reduce((acc, ex) => {
+      if (!acc[ex.category]) acc[ex.category] = [];
+      acc[ex.category].push(ex);
+      return acc;
+    }, {} as Record<string, WorkoutExercise[]>);
+
     return (
       <View style={styles.workoutCard}>
         {/* Header Row */}
@@ -261,18 +264,28 @@ export default function HomeScreen() {
         {/* Exercise Details */}
         {visibleExercises.length > 0 && (
           <View style={styles.exerciseList}>
-            {visibleExercises.map((ex, idx) => (
-              <View key={idx} style={styles.exerciseRow}>
-                <Text style={styles.exerciseName}>{ex.name}</Text>
-                <View style={styles.setsRow}>
-                  {ex.sets.map((set, si) => (
-                    <View key={si} style={styles.setChip}>
-                      <Text style={styles.setChipText}>
-                        {set.weight > 0 ? `${set.weight}kg` : 'BW'} × {set.reps}
-                      </Text>
-                    </View>
-                  ))}
+            {Object.entries(groupedVisible).map(([category, exercises], catIdx) => (
+              <View key={category} style={{ marginTop: catIdx > 0 ? 12 : 0 }}>
+                {/* Category Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: category === 'Gym' ? '#4DB8FF' : '#FF6B6B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    {category === 'Gym' ? '🏋️ Weightlifting' : '🤸 Calisthenics'}
+                  </Text>
                 </View>
+                {exercises.map((ex, idx) => (
+                  <View key={idx} style={[styles.exerciseRow, { marginBottom: idx < exercises.length - 1 ? 10 : 0 }]}>
+                    <Text style={styles.exerciseName}>{ex.name}</Text>
+                    <View style={styles.setsRow}>
+                      {ex.sets.map((set, si) => (
+                        <View key={si} style={styles.setChip}>
+                          <Text style={styles.setChipText}>
+                            {set.weight > 0 ? `${set.weight}kg` : 'BW'} × {set.reps}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ))}
               </View>
             ))}
             {hiddenCount > 0 && (
@@ -287,19 +300,13 @@ export default function HomeScreen() {
   return (
     <ScrollView 
       style={styles.container}
+      contentContainerStyle={styles.scrollContent}
       refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Home</Text>
-        <Pressable
-          style={({ pressed }) => pressed ? [styles.manageLink, { opacity: 0.6 }] : styles.manageLink}
-          onPress={() => router.push('/exercises')}
-        >
-          <Text style={styles.manageLinkText}>Manage Exercises</Text>
-          <Text style={styles.manageLinkArrow}>›</Text>
-        </Pressable>
       </View>
 
       {/* Stats Row */}
@@ -321,12 +328,12 @@ export default function HomeScreen() {
       {/* Clean, Prominent 'Add a Workout' CTA with directional arrow */}
       <Pressable
         style={({ pressed }) => pressed ? [styles.addWorkoutBtn, styles.addWorkoutBtnPressed] : styles.addWorkoutBtn}
-        onPress={() => setShowCategoryPicker(true)}
+        onPress={() => router.push('/workout')}
       >
         <View style={styles.addWorkoutInner}>
           <View>
             <Text style={styles.addWorkoutText}>Add a Workout</Text>
-            <Text style={styles.addWorkoutSub}>Select category and start session</Text>
+            <Text style={styles.addWorkoutSub}>Start a new session</Text>
           </View>
           <View style={styles.chevronCircle}>
             <Text style={styles.chevronIcon}>›</Text>
@@ -357,51 +364,7 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Category Picker Modal */}
-      <Modal
-        visible={showCategoryPicker}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setShowCategoryPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Choose Category</Text>
-            <Text style={styles.modalSubtitle}>What are you training today?</Text>
-
-            <Pressable
-              style={({ pressed }) => pressed ? [styles.categoryCard, styles.categoryCardPressed] : styles.categoryCard}
-              onPress={() => handleCategorySelect('Gym')}
-            >
-              <Text style={styles.categoryEmoji}>🏋️</Text>
-              <View style={styles.categoryInfo}>
-                <Text style={styles.categoryName}>Gym</Text>
-                <Text style={styles.categoryDesc}>Weights, machines & cables</Text>
-              </View>
-              <Text style={styles.categoryChevron}>›</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => pressed ? [styles.categoryCard, styles.categoryCardPressed] : styles.categoryCard}
-              onPress={() => handleCategorySelect('Calisthenics')}
-            >
-              <Text style={styles.categoryEmoji}>🤸</Text>
-              <View style={styles.categoryInfo}>
-                <Text style={styles.categoryName}>Calisthenics</Text>
-                <Text style={styles.categoryDesc}>Bodyweight & functional</Text>
-              </View>
-              <Text style={styles.categoryChevron}>›</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => pressed ? [styles.cancelBtn, { opacity: 0.7 }] : styles.cancelBtn}
-              onPress={() => setShowCategoryPicker(false)}
-            >
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
+      {/* Modal Removed */}
     </ScrollView>
   );
 }
@@ -410,8 +373,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0A0A0A',
+  },
+  scrollContent: {
     paddingHorizontal: 24,
     paddingTop: 60,
+    paddingBottom: 120,
   },
   header: {
     flexDirection: 'row',
@@ -423,27 +389,6 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontWeight: 'bold',
     color: '#FFFFFF',
-  },
-  manageLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#1A1A1A',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
-  manageLinkText: {
-    fontSize: 13,
-    color: '#39FF14',
-    fontWeight: '600',
-  },
-  manageLinkArrow: {
-    fontSize: 16,
-    color: '#39FF14',
-    fontWeight: 'bold',
   },
 
   addWorkoutBtn: {
