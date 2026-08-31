@@ -1,15 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   StyleSheet, Text, View, Pressable, TextInput, FlatList,
   Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform, BackHandler
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
+import { getCachedData, cacheData } from '../lib/cache';
 
 type Exercise = {
   id: string;
   name: string;
-  category: 'Gym' | 'Calisthenics';
+  category: string;
+  target?: string;
+  muscle_group?: string;
+  equipment?: string;
 };
 
 type SetEntry = {
@@ -40,10 +44,12 @@ const DEFAULT_CALISTHENICS: string[] = [
   'Mountain Climbers', 'Hanging Leg Raise',
 ];
 
+const CATEGORIES = ['All', 'chest', 'back', 'upper legs', 'waist', 'shoulders', 'cardio', 'upper arms', 'lower legs', 'lower arms', 'neck', 'Gym', 'Calisthenics'];
+
 export default function WorkoutScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const [activeCategory, setActiveCategory] = useState<'All' | 'Gym' | 'Calisthenics'>('All');
+  const [selectedCategory, setSelectedCategory] = useState('All');
 
   const [availableExercises, setAvailableExercises] = useState<Exercise[]>([]);
   const [selectedExercises, setSelectedExercises] = useState<SelectedExercise[]>([]);
@@ -146,10 +152,16 @@ export default function WorkoutScreen() {
 
   const loadExercises = async (uid: string) => {
     try {
+      const cacheKey = `exercises_library_data_v3_${uid}_all`;
+      const cached = await getCachedData<Exercise[]>(cacheKey);
+      if (cached) {
+        setAvailableExercises(cached);
+      }
+
       const { data, error } = await supabase
         .from('exercises')
         .select('*')
-        .eq('user_id', uid)
+        .or(`user_id.eq.${uid},user_id.is.null`)
         .order('name', { ascending: true });
 
       if (error) throw error;
@@ -159,8 +171,10 @@ export default function WorkoutScreen() {
         const rows = [...rowsGym, ...rowsCali];
         const { data: inserted } = await supabase.from('exercises').insert(rows).select('*');
         setAvailableExercises(inserted || []);
+        await cacheData(cacheKey, inserted || []);
       } else {
         setAvailableExercises(data);
+        await cacheData(cacheKey, data);
       }
     } catch (err: any) {
       console.error('Error loading exercises:', err.message);
@@ -571,6 +585,16 @@ export default function WorkoutScreen() {
     );
   }
 
+  const filteredAvailableExercises = useMemo(() => {
+    return availableExercises.filter(ex => {
+      if (!ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())) return false;
+      if (selectedCategory === 'All') return true;
+      if (selectedCategory === 'Calisthenics') return ex.equipment === 'body weight' || ex.category === 'Calisthenics';
+      if (selectedCategory === 'Gym') return (ex.equipment && ex.equipment !== 'body weight') || ex.category === 'Gym';
+      return ex.category?.toLowerCase() === selectedCategory.toLowerCase();
+    });
+  }, [availableExercises, exerciseSearchQuery, selectedCategory]);
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -749,33 +773,41 @@ export default function WorkoutScreen() {
               </Pressable>
             </View>
 
-            {/* Segmented Control */}
-            <View style={{ flexDirection: 'row', backgroundColor: '#1A1A1A', borderRadius: 12, padding: 4, marginBottom: 12, borderWidth: 1, borderColor: '#222222' }}>
-              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'All' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('All')}>
-                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'All' ? 'bold' : '600', color: activeCategory === 'All' ? '#0A0A0A' : '#888888' }}>All</Text>
-              </Pressable>
-              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'Gym' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('Gym')}>
-                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'Gym' ? 'bold' : '600', color: activeCategory === 'Gym' ? '#0A0A0A' : '#888888' }}>Gym</Text>
-              </Pressable>
-              <Pressable style={{ flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 8, backgroundColor: activeCategory === 'Calisthenics' ? '#39FF14' : 'transparent' }} onPress={() => setActiveCategory('Calisthenics')}>
-                <Text style={{ fontSize: 14, fontWeight: activeCategory === 'Calisthenics' ? 'bold' : '600', color: activeCategory === 'Calisthenics' ? '#0A0A0A' : '#888888' }}>Cali</Text>
-              </Pressable>
-            </View>
-
-            <TextInput
-              className="bg-[#1A1A1A] border border-[#1E1E1E] text-white px-4 py-3 rounded-xl mb-4 placeholder-[#888888]"
-              placeholder="Search exercises..."
-              placeholderTextColor="#888888"
-              value={exerciseSearchQuery}
-              onChangeText={setExerciseSearchQuery}
-            />
-
             <FlatList
-              data={availableExercises.filter(ex => 
-                (activeCategory === 'All' || ex.category === activeCategory) &&
-                ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())
-              )}
+              data={filteredAvailableExercises}
+              ListHeaderComponent={
+                <>
+                  {/* Category Chips */}
+                  <View className="mb-4">
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row">
+                      {CATEGORIES.map(cat => (
+                        <Pressable
+                          key={cat}
+                          onPress={() => setSelectedCategory(cat)}
+                          className={`px-4 py-2 rounded-full mr-2 ${selectedCategory === cat ? 'bg-[#39FF14]' : 'bg-[#1A1A1A] border border-[#222222]'}`}
+                        >
+                          <Text className={`font-bold ${selectedCategory === cat ? 'text-black' : 'text-white'}`}>
+                            {cat === 'All' ? 'All' : cat.charAt(0).toUpperCase() + cat.slice(1)}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+
+                  <TextInput
+                    className="bg-[#1A1A1A] border border-[#1E1E1E] text-white px-4 py-3 rounded-xl mt-4 mb-4 placeholder-[#888888]"
+                    placeholder="Search exercises..."
+                    placeholderTextColor="#888888"
+                    value={exerciseSearchQuery}
+                    onChangeText={setExerciseSearchQuery}
+                  />
+                </>
+              }
               keyExtractor={item => item.id}
+              initialNumToRender={10}
+              maxToRenderPerBatch={10}
+              windowSize={5}
+              removeClippedSubviews={true}
               contentContainerStyle={{ paddingBottom: 20 }}
               renderItem={({ item }) => {
                 const isAlreadyIn = selectedExercises.some(se => se.exercise.id === item.id);

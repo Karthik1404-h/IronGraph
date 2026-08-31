@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet, Text, View, Pressable, TextInput, FlatList,
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
@@ -10,7 +10,10 @@ import { getCachedData, cacheData } from '../lib/cache';
 type Exercise = {
   id: string;
   name: string;
-  category: 'Gym' | 'Calisthenics';
+  category: string;
+  target?: string;
+  muscle_group?: string;
+  equipment?: string;
 };
 
 const DEFAULT_GYM: string[] = [
@@ -39,13 +42,19 @@ const DEFAULT_CALISTHENICS: string[] = [
   'Full Planche', 'Front Lever Raises', 'Toes to Bar', 'Windshield Wipers', 'Skin the Cat',
 ];
 
+const CATEGORIES = ['All', 'chest', 'back', 'upper legs', 'waist', 'shoulders', 'cardio', 'upper arms', 'lower legs', 'lower arms', 'neck', 'Gym', 'Calisthenics'];
+
 const isDefaultExercise = (name: string) => DEFAULT_GYM.includes(name) || DEFAULT_CALISTHENICS.includes(name);
 
 export default function ExerciseManagementScreen() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'Gym' | 'Calisthenics'>('Gym');
+  const [selectedCategory, setSelectedCategory] = useState('All');
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [newExerciseName, setNewExerciseName] = useState('');
+  const [newExerciseCategory, setNewExerciseCategory] = useState('');
+  const [newExerciseTarget, setNewExerciseTarget] = useState('');
+  const [newExerciseMuscleGroup, setNewExerciseMuscleGroup] = useState('');
+  const [newExerciseEquipment, setNewExerciseEquipment] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -57,16 +66,16 @@ export default function ExerciseManagementScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setUserId(user.id);
-        fetchExercises(user.id, activeTab);
+        fetchExercises(user.id);
       }
     };
     init();
-  }, [activeTab]);
+  }, []);
 
-  const fetchExercises = async (uid: string, cat: 'Gym' | 'Calisthenics') => {
+  const fetchExercises = async (uid: string) => {
     setIsLoading(true);
     try {
-      const cacheKey = `exercises_library_data_${uid}_${cat}`;
+      const cacheKey = `exercises_library_data_v3_${uid}_all`;
       const cached = await getCachedData<Exercise[]>(cacheKey);
       if (cached) {
         setExercises(cached);
@@ -76,15 +85,15 @@ export default function ExerciseManagementScreen() {
       const { data, error } = await supabase
         .from('exercises')
         .select('*')
-        .eq('user_id', uid)
-        .eq('category', cat)
+        .or(`user_id.eq.${uid},user_id.is.null`)
         .order('name', { ascending: true });
 
       if (error) throw error;
 
       if (!data || data.length === 0) {
-        const defaults = cat === 'Gym' ? DEFAULT_GYM : DEFAULT_CALISTHENICS;
-        const rows = defaults.map(name => ({ user_id: uid, name, category: cat }));
+        const rowsGym = DEFAULT_GYM.map(name => ({ user_id: uid, name, category: 'Gym' }));
+        const rowsCali = DEFAULT_CALISTHENICS.map(name => ({ user_id: uid, name, category: 'Calisthenics' }));
+        const rows = [...rowsGym, ...rowsCali];
         const { data: inserted } = await supabase
           .from('exercises')
           .insert(rows)
@@ -133,10 +142,22 @@ export default function ExerciseManagementScreen() {
         
       if (insertErr) throw insertErr;
       
-      await fetchExercises(userId, activeTab);
+      await fetchExercises(userId);
       Alert.alert("Sync Complete", `Successfully added ${toInsert.length} new exercises.`);
     } catch (err: any) {
       Alert.alert("Sync Error", err.message || "Failed to sync exercises.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleForceSync = async () => {
+    if (!userId) return;
+    setIsSyncing(true);
+    try {
+      await fetchExercises(userId);
+    } catch (error) {
+      console.error(error);
     } finally {
       setIsSyncing(false);
     }
@@ -157,7 +178,10 @@ export default function ExerciseManagementScreen() {
         .insert({
           user_id: userId,
           name,
-          category: activeTab,
+          category: newExerciseCategory.trim() || (selectedCategory === 'All' ? 'Gym' : selectedCategory),
+          target: newExerciseTarget.trim() || null,
+          muscle_group: newExerciseMuscleGroup.trim() || null,
+          equipment: newExerciseEquipment.trim() || null,
         })
         .select('*')
         .single();
@@ -211,9 +235,15 @@ export default function ExerciseManagementScreen() {
     </View>
   );
 
-  const filteredExercises = exercises.filter(e => 
-    e.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredExercises = useMemo(() => {
+    return exercises.filter(e => {
+      if (!e.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (selectedCategory === 'All') return true;
+      if (selectedCategory === 'Calisthenics') return e.equipment === 'body weight' || e.category === 'Calisthenics';
+      if (selectedCategory === 'Gym') return (e.equipment && e.equipment !== 'body weight') || e.category === 'Gym';
+      return e.category?.toLowerCase() === selectedCategory.toLowerCase();
+    });
+  }, [exercises, searchQuery, selectedCategory]);
 
   return (
     <KeyboardAvoidingView
@@ -229,97 +259,140 @@ export default function ExerciseManagementScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Sync Button */}
-      <View className="px-5 mt-4">
-        <Pressable 
-          onPress={syncMissingExercises}
-          disabled={isSyncing}
-          className={`bg-[#1A1A1A] border border-[#39FF14] p-3 rounded-xl flex-row justify-center items-center ${isSyncing ? 'opacity-50' : ''}`}
-        >
-          {isSyncing ? (
-            <ActivityIndicator color="#39FF14" size="small" />
+      <FlatList
+        data={filteredExercises}
+        keyExtractor={item => item.id}
+        renderItem={renderExerciseItem}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
+        ListHeaderComponent={
+          <>
+            {/* Sync Button */}
+            <View className="px-5 mt-4">
+              <Pressable 
+                className="bg-[#1A1A1A] border border-[#222222] flex-row items-center justify-center py-3 rounded-xl"
+                onPress={handleForceSync}
+                disabled={isSyncing}
+              >
+                {isSyncing ? (
+                  <ActivityIndicator color="#39FF14" size="small" />
+                ) : (
+                  <>
+                    <Text className="text-white font-bold mr-2">🔄</Text>
+                    <Text className="text-white font-bold">Sync Defaults from Cloud</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+
+            {/* Search */}
+            <View className="px-5 mt-4">
+              <TextInput
+                className="bg-[#1A1A1A] border border-[#1E1E1E] text-white px-4 py-3 rounded-xl placeholder-[#888888]"
+                placeholder="Search..."
+                placeholderTextColor="#888888"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+            </View>
+
+            {/* Category Chips */}
+            <View className="mt-4 mb-4">
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row">
+                {CATEGORIES.map(cat => (
+                  <Pressable
+                    key={cat}
+                    onPress={() => setSelectedCategory(cat)}
+                    className={`px-4 py-2 rounded-full mr-2 ${selectedCategory === cat ? 'bg-[#39FF14]' : 'bg-[#1A1A1A] border border-[#222222]'}`}
+                  >
+                    <Text className={`font-bold ${selectedCategory === cat ? 'text-black' : 'text-white'}`}>
+                      {cat === 'All' ? 'All' : cat.charAt(0).toUpperCase() + cat.slice(1)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Input Section */}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>Add Custom {selectedCategory === 'All' ? 'Exercise' : selectedCategory}</Text>
+              <View className="mb-2">
+                <TextInput
+                  style={styles.textInput}
+                  placeholder={`Exercise Name (e.g. Incline Dumbbell Press)`}
+                  placeholderTextColor="#555555"
+                  value={newExerciseName}
+                  onChangeText={setNewExerciseName}
+                />
+              </View>
+              <View className="flex-row justify-between mb-2">
+                <TextInput
+                  className="flex-1 bg-[#1A1A1A] border border-[#222222] text-white px-3 py-2 rounded-lg mr-2"
+                  placeholder="Category (Optional)"
+                  placeholderTextColor="#555555"
+                  value={newExerciseCategory}
+                  onChangeText={setNewExerciseCategory}
+                />
+                <TextInput
+                  className="flex-1 bg-[#1A1A1A] border border-[#222222] text-white px-3 py-2 rounded-lg"
+                  placeholder="Target (Optional)"
+                  placeholderTextColor="#555555"
+                  value={newExerciseTarget}
+                  onChangeText={setNewExerciseTarget}
+                />
+              </View>
+              <View className="flex-row justify-between mb-3">
+                <TextInput
+                  className="flex-1 bg-[#1A1A1A] border border-[#222222] text-white px-3 py-2 rounded-lg mr-2"
+                  placeholder="Muscle (Optional)"
+                  placeholderTextColor="#555555"
+                  value={newExerciseMuscleGroup}
+                  onChangeText={setNewExerciseMuscleGroup}
+                />
+                <TextInput
+                  className="flex-1 bg-[#1A1A1A] border border-[#222222] text-white px-3 py-2 rounded-lg"
+                  placeholder="Equipment (Optional)"
+                  placeholderTextColor="#555555"
+                  value={newExerciseEquipment}
+                  onChangeText={setNewExerciseEquipment}
+                />
+              </View>
+              <Pressable
+                className="bg-[#39FF14] px-4 py-3 rounded-xl items-center"
+                onPress={handleAddExercise}
+                disabled={isSubmitting || !newExerciseName.trim()}
+              >
+                {isSubmitting ? (
+                  <ActivityIndicator color="#0A0A0A" size="small" />
+                ) : (
+                  <Text className="text-black font-bold text-base">Add Exercise</Text>
+                )}
+              </Pressable>
+            </View>
+
+            <View style={styles.listSection}>
+              <Text style={styles.listHeader}>Your Exercises ({filteredExercises.length})</Text>
+            </View>
+          </>
+        }
+        ListEmptyComponent={
+          isLoading ? (
+            <View style={styles.loaderContainer}>
+              <ActivityIndicator color="#39FF14" size="large" />
+            </View>
           ) : (
-            <Text className="text-[#39FF14] font-bold text-[15px]">Sync New Exercises</Text>
-          )}
-        </Pressable>
-      </View>
-
-      {/* Search Bar */}
-      <View className="px-5 mt-4">
-        <TextInput
-          className="bg-[#1A1A1A] border border-[#1E1E1E] text-white px-4 py-3 rounded-xl placeholder-[#888888]"
-          placeholder="Search exercises..."
-          placeholderTextColor="#888888"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-
-      {/* Category Tabs */}
-      <View style={styles.tabContainer}>
-        <Pressable
-          style={[styles.tabBtn, activeTab === 'Gym' && styles.tabBtnActive]}
-          onPress={() => setActiveTab('Gym')}
-        >
-          <Text style={[styles.tabText, activeTab === 'Gym' && styles.tabTextActive]}>Gym 🏋️</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tabBtn, activeTab === 'Calisthenics' && styles.tabBtnActive]}
-          onPress={() => setActiveTab('Calisthenics')}
-        >
-          <Text style={[styles.tabText, activeTab === 'Calisthenics' && styles.tabTextActive]}>Calisthenics 🤸</Text>
-        </Pressable>
-      </View>
-
-      {/* Input Section */}
-      <View style={styles.inputSection}>
-        <Text style={styles.inputLabel}>Add Custom {activeTab} Exercise</Text>
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.textInput}
-            placeholder={`e.g. Incline Dumbbell Press`}
-            placeholderTextColor="#555555"
-            value={newExerciseName}
-            onChangeText={setNewExerciseName}
-            onSubmitEditing={handleAddExercise}
-          />
-          <Pressable
-            className={`bg-[#39FF14] px-4 py-3 rounded-xl items-center ml-2 ${(isSubmitting || !newExerciseName.trim()) ? 'opacity-50' : ''}`}
-            onPress={handleAddExercise}
-            disabled={isSubmitting || !newExerciseName.trim()}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator color="#0A0A0A" size="small" />
-            ) : (
-              <Text className="text-black font-bold text-base">Add</Text>
-            )}
-          </Pressable>
-        </View>
-      </View>
-
-      {/* List Section */}
-      <View style={styles.listSection}>
-        <Text style={styles.listHeader}>Your {activeTab} Exercises ({filteredExercises.length})</Text>
-        {isLoading ? (
-          <View style={styles.loaderContainer}>
-            <ActivityIndicator color="#39FF14" size="large" />
-          </View>
-        ) : filteredExercises.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>
-              {searchQuery ? 'No matching exercises found.' : `No exercises found in this category.\nAdd one above to get started!`}
-            </Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredExercises}
-            keyExtractor={item => item.id}
-            renderItem={renderExerciseItem}
-            contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
-          />
-        )}
-      </View>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText}>
+                {searchQuery ? 'No matching exercises found.' : `No exercises found in this category.\nAdd one above to get started!`}
+              </Text>
+            </View>
+          )
+        }
+      />
     </KeyboardAvoidingView>
   );
 }
