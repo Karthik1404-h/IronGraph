@@ -2,6 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View, ScrollView, RefreshControl } from 'react-native';
 import { supabase } from '../../lib/supabase';
+import { getCachedData, cacheData } from '../../lib/cache';
 
 type WorkoutSet = {
   weight: number;
@@ -52,8 +53,27 @@ export default function HomeScreen() {
   const fetchDashboardData = async () => {
     setIsLoading(true);
     try {
+      const cached = await getCachedData<{
+        recentWorkouts: RecentWorkout[];
+        currentStreak: number;
+        longestStreak: number;
+        workoutsLast7Days: number;
+      }>('home_dashboard_data');
+      
+      if (cached) {
+        setRecentWorkouts(cached.recentWorkouts);
+        setCurrentStreak(cached.currentStreak);
+        setLongestStreak(cached.longestStreak);
+        setWorkoutsLast7Days(cached.workoutsLast7Days);
+        setIsLoading(false);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      let finalStreak = 0;
+      let finalLongestStreak = 0;
+      let finalWorkoutsLast7Days = 0;
 
       // Fetch all workout times to calculate streaks & 7 day volume
       const { data: allWorkouts } = await supabase
@@ -97,6 +117,7 @@ export default function HomeScreen() {
             }
           }
         }
+        finalStreak = streak;
         setCurrentStreak(streak);
 
         let maxStreak = 0;
@@ -111,6 +132,7 @@ export default function HomeScreen() {
             }
           }
           if (currentLoopStreak > maxStreak) maxStreak = currentLoopStreak;
+          finalLongestStreak = maxStreak;
           setLongestStreak(maxStreak);
         } else {
           setLongestStreak(0);
@@ -118,6 +140,7 @@ export default function HomeScreen() {
 
         const sevenDaysAgo = today.getTime() - (7 * 86400000);
         const last7DaysCount = allWorkouts.filter(w => new Date(w.start_time).getTime() >= sevenDaysAgo).length;
+        finalWorkoutsLast7Days = last7DaysCount;
         setWorkoutsLast7Days(last7DaysCount);
       } else {
         setCurrentStreak(0);
@@ -171,8 +194,20 @@ export default function HomeScreen() {
           });
         }
         setRecentWorkouts(enriched);
+        await cacheData('home_dashboard_data', {
+          recentWorkouts: enriched,
+          currentStreak: finalStreak,
+          longestStreak: finalLongestStreak,
+          workoutsLast7Days: finalWorkoutsLast7Days,
+        });
       } else {
         setRecentWorkouts([]);
+        await cacheData('home_dashboard_data', {
+          recentWorkouts: [],
+          currentStreak: finalStreak,
+          longestStreak: finalLongestStreak,
+          workoutsLast7Days: finalWorkoutsLast7Days,
+        });
       }
     } catch (error) {
       console.error('Dashboard fetch error:', error);

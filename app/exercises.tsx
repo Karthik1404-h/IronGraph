@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
+import { getCachedData, cacheData } from '../lib/cache';
 
 type Exercise = {
   id: string;
@@ -65,6 +66,13 @@ export default function ExerciseManagementScreen() {
   const fetchExercises = async (uid: string, cat: 'Gym' | 'Calisthenics') => {
     setIsLoading(true);
     try {
+      const cacheKey = `exercises_library_data_${uid}_${cat}`;
+      const cached = await getCachedData<Exercise[]>(cacheKey);
+      if (cached) {
+        setExercises(cached);
+        setIsLoading(false);
+      }
+
       const { data, error } = await supabase
         .from('exercises')
         .select('*')
@@ -82,8 +90,10 @@ export default function ExerciseManagementScreen() {
           .insert(rows)
           .select('*');
         setExercises(inserted || []);
+        await cacheData(cacheKey, inserted || []);
       } else {
         setExercises(data);
+        await cacheData(cacheKey, data);
       }
     } catch (err: any) {
       console.error('Error loading exercises:', err.message);

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View, RefreshControl } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
+import { getCachedData, cacheData } from '../../lib/cache';
 
 // Rounds val up to the nearest "nice" scale value (1, 2, 5, 10, 20, 50 …)
 function niceNum(val: number): number {
@@ -86,6 +87,12 @@ export default function WeightScreen() {
 
   const fetchLogs = async () => {
     try {
+      const cached = await getCachedData<WeightLog[]>('weight_logs_data');
+      if (cached) {
+        setRealLogs(cached);
+        setIsLoadingLogs(false);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -100,6 +107,7 @@ export default function WeightScreen() {
       }
 
       setRealLogs(data || []);
+      await cacheData('weight_logs_data', data || []);
     } catch (error: any) {
       console.error('Error fetching logs:', error.message);
     } finally {

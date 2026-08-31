@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, Pressable, Alert, FlatList, ActivityIndicator, 
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../../lib/supabase';
+import { getCachedData, cacheData } from '../../lib/cache';
 
 type Profile = {
   id: string;
@@ -55,6 +56,19 @@ export default function ProfileScreen() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      const cached = await getCachedData<{
+        profile: Profile | null;
+        editNameValue: string;
+        friends: FriendItem[];
+      }>('profile_user_data');
+
+      if (cached) {
+        setProfile(cached.profile);
+        setEditNameValue(cached.editNameValue);
+        setFriends(cached.friends);
+        setIsLoading(false);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       
@@ -86,6 +100,12 @@ export default function ProfileScreen() {
       }).filter(f => f.profile);
       
       setFriends(accepted);
+
+      await cacheData('profile_user_data', {
+        profile: profileData || null,
+        editNameValue: profileData ? (profileData.display_name || profileData.email || '') : '',
+        friends: accepted
+      });
     } catch(err: any) {
       console.error(err.message);
     } finally {

@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View, RefreshControl } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { supabase } from '../../lib/supabase';
+import { getCachedData, cacheData } from '../../lib/cache';
 
 // Pick a human-friendly step size given a data span
 function niceStep(span: number): number {
@@ -98,6 +99,21 @@ export default function SocialScreen() {
     if (!isMounted()) return;
     setIsLoading(true);
     try {
+      const cached = await getCachedData<{
+        pendingRequests: Friendship[];
+        globalUsers: GlobalUser[];
+        leaderboard: LeaderboardEntry[];
+        allLogs: Record<string, any[]>;
+      }>('social_leaderboard_data');
+
+      if (cached && isMounted()) {
+        setPendingRequests(cached.pendingRequests);
+        setGlobalUsers(cached.globalUsers);
+        setLeaderboard(cached.leaderboard);
+        setAllLogs(cached.allLogs);
+        setIsLoading(false);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       if (!user || !isMounted()) return;
       setCurrentUserId(user.id);
@@ -237,6 +253,13 @@ export default function SocialScreen() {
       if (!isMounted()) return;
       setLeaderboard(leaderboardData);
       setAllLogs(logsMap);
+
+      await cacheData('social_leaderboard_data', {
+        pendingRequests: pending,
+        globalUsers: globalList,
+        leaderboard: leaderboardData,
+        allLogs: logsMap
+      });
 
     } catch (err: any) {
       if (isMounted()) {
