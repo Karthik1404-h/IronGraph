@@ -1,11 +1,21 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { cacheData, getCachedData } from '@/lib/cache';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  StyleSheet, Text, View, Pressable, TextInput, FlatList,
-  Alert, ActivityIndicator, ScrollView, Modal, KeyboardAvoidingView, Platform, BackHandler
+  ActivityIndicator,
+  Alert,
+  BackHandler,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet, Text,
+  TextInput,
+  View
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '../lib/supabase';
-import { getCachedData, cacheData } from '../lib/cache';
 
 type Exercise = {
   id: string;
@@ -93,6 +103,15 @@ export default function WorkoutScreen() {
     };
     init();
   }, []);
+
+  // Ensure exercises are refreshed if the user added one and came back
+  useFocusEffect(
+    useCallback(() => {
+      if (userId) {
+        loadExercises(userId);
+      }
+    }, [userId])
+  );
 
   // Hydrate state when editing an existing workout
   useEffect(() => {
@@ -221,23 +240,62 @@ export default function WorkoutScreen() {
         setAvailableExercises(cached);
       }
 
-      const { data, error } = await supabase
-        .from('exercises')
-        .select('*')
-        .or(`user_id.eq.${uid},user_id.is.null`)
-        .order('name', { ascending: true });
+      let allData: Exercise[] = [];
+      let from = 0;
+      const step = 1000;
+      let fetchMore = true;
 
-      if (error) throw error;
-      if (!data || data.length === 0) {
+      while (fetchMore) {
+        const { data, error } = await supabase
+          .from('exercises')
+          .select('*')
+          .or(`user_id.eq.${uid},user_id.is.null`)
+          .order('name', { ascending: true })
+          .range(from, from + step - 1);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < step) {
+            fetchMore = false;
+          } else {
+            from += step;
+          }
+        } else {
+          fetchMore = false;
+        }
+      }
+      if (allData.length === 0) {
         const rowsGym = DEFAULT_GYM.map(name => ({ user_id: uid, name, category: 'Gym' }));
         const rowsCali = DEFAULT_CALISTHENICS.map(name => ({ user_id: uid, name, category: 'Calisthenics' }));
         const rows = [...rowsGym, ...rowsCali];
         const { data: inserted } = await supabase.from('exercises').insert(rows).select('*');
-        setAvailableExercises(inserted || []);
-        await cacheData(cacheKey, inserted || []);
+        
+        // Deduplicate inserted just in case
+        const uniqueMap = new Map<string, Exercise>();
+        for (const e of (inserted || [])) {
+          const key = e.name.toLowerCase().trim();
+          if (!uniqueMap.has(key) || (e.category === 'Gym' || e.category === 'Calisthenics')) {
+            uniqueMap.set(key, e);
+          }
+        }
+        const uniqueInserted = Array.from(uniqueMap.values());
+        
+        setAvailableExercises(uniqueInserted);
+        await cacheData(cacheKey, uniqueInserted);
       } else {
-        setAvailableExercises(data);
-        await cacheData(cacheKey, data);
+        const uniqueMap = new Map<string, Exercise>();
+        for (const e of allData) {
+          const key = e.name.toLowerCase().trim();
+          if (!uniqueMap.has(key) || (e.category === 'Gym' || e.category === 'Calisthenics')) {
+            uniqueMap.set(key, e);
+          }
+        }
+        const uniqueAllData = Array.from(uniqueMap.values());
+
+        setAvailableExercises(uniqueAllData);
+        await cacheData(cacheKey, uniqueAllData);
       }
     } catch (err: any) {
       console.error('Error loading exercises:', err.message);
@@ -497,9 +555,9 @@ export default function WorkoutScreen() {
       "Are you sure? All unsaved progress will be lost.",
       [
         { text: "Resume", style: "cancel" },
-        { 
-          text: "Discard", 
-          style: "destructive", 
+        {
+          text: "Discard",
+          style: "destructive",
           onPress: async () => {
             if (!editWorkoutId && workoutId) {
               // Only delete the session row if it was freshly created (not editing)
@@ -507,7 +565,7 @@ export default function WorkoutScreen() {
               await supabase.from('workouts').delete().eq('id', workoutId);
             }
             router.back();
-          } 
+          }
         }
       ]
     );
@@ -649,8 +707,12 @@ export default function WorkoutScreen() {
   }
 
   const filteredAvailableExercises = useMemo(() => {
+    const normalizedSearch = exerciseSearchQuery.toLowerCase().replace(/[\s-]/g, '');
+
     return availableExercises.filter(ex => {
-      if (!ex.name.toLowerCase().includes(exerciseSearchQuery.toLowerCase())) return false;
+      const normalizedName = ex.name.toLowerCase().replace(/[\s-]/g, '');
+      if (!normalizedName.includes(normalizedSearch)) return false;
+      
       if (selectedCategory === 'All') return true;
       if (selectedCategory === 'Calisthenics') return ex.equipment === 'body weight' || ex.category === 'Calisthenics';
       if (selectedCategory === 'Gym') return (ex.equipment && ex.equipment !== 'body weight') || ex.category === 'Gym';
