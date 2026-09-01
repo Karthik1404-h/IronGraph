@@ -1,9 +1,9 @@
-import { cacheData, getCachedData } from '@/lib/cache';
-import { supabase } from '@/lib/supabase';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, FlatList, Image, Pressable, StyleSheet, Text, View, RefreshControl } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
+import { supabase } from '../../lib/supabase';
+import { getCachedData, cacheData } from '../../lib/cache';
 
 // Pick a human-friendly step size given a data span
 function niceStep(span: number): number {
@@ -499,7 +499,7 @@ export default function SocialScreen() {
   // Each person gets their own scale so small day-to-day changes are clearly visible.
   // Key rule: yAxisOffset = axisMin, maxValue = range (NOT absolute max).
   const buildAxisConfig = (data: { value: number }[]) => {
-    const fallback = { axisMin: 60, range: 10, step: 2, noOfSections: 5, labels: ['60kg', '62kg', '64kg', '66kg', '68kg', '70kg'] };
+    const fallback = { axisMin: 60, range: 10, step: 2, noOfSections: 5, labels: ['60kg','62kg','64kg','66kg','68kg','70kg'] };
     const vals = data.map(d => d.value).filter(v => isFinite(v) && v != null);
     if (vals.length === 0) return fallback;
 
@@ -510,8 +510,8 @@ export default function SocialScreen() {
 
     // Choose a step appropriate for the variation magnitude
     let step: number;
-    if (dataSpan <= 1.5) step = 0.5;
-    else if (dataSpan <= 4) step = 1;
+    if (dataSpan <= 1.5)  step = 0.5;
+    else if (dataSpan <= 4)  step = 1;
     else if (dataSpan <= 10) step = 2;
     else step = niceStep(dataSpan / 4);
 
@@ -537,7 +537,7 @@ export default function SocialScreen() {
     return { axisMin, range, step, noOfSections, labels };
   };
 
-  const myAxisConfig = useMemo(() => buildAxisConfig(chartDataMy), [chartDataMy]);
+  const myAxisConfig     = useMemo(() => buildAxisConfig(chartDataMy),     [chartDataMy]);
   const friendAxisConfig = useMemo(() => buildAxisConfig(chartDataFriend), [chartDataFriend]);
 
   // Compute the change over the currently selected period for a dataset
@@ -551,7 +551,7 @@ export default function SocialScreen() {
     <View style={styles.container}>
       <FlatList
         style={styles.container}
-        refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14" />}
+        refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
         contentContainerStyle={styles.scrollContent}
         data={leaderboard}
         keyExtractor={(item) => item.id}
@@ -661,6 +661,7 @@ export default function SocialScreen() {
                             yAxisOffset={cfg.axisMin}
                             yAxisLabelTexts={cfg.labels}
                             yAxisLabelWidth={52}
+                            hideXAxisText
                             disableScroll
                             spacing={(chartW - 40) / Math.max(1, chartDataMy.length - 1)}
                             initialSpacing={20}
@@ -733,11 +734,11 @@ export default function SocialScreen() {
             {isLoading && globalUsers.length === 0 ? (
               <ActivityIndicator color="#39FF14" />
             ) : (
-              globalUsers.filter(user => user && user.id).map(user => (
-                <React.Fragment key={user.id}>
-                  {renderGlobalUser({ item: user })}
-                </React.Fragment>
-              ))
+               globalUsers.filter(user => user && user.id).map(user => (
+                 <React.Fragment key={user.id}>
+                   {renderGlobalUser({ item: user })}
+                 </React.Fragment>
+               ))
             )}
             {globalUsers.length === 0 && !isLoading && (
               <Text style={styles.emptyText}>No other users found.</Text>
