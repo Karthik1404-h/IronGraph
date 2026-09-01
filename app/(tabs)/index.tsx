@@ -1,8 +1,8 @@
+import { cacheData, getCachedData } from '@/lib/cache';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View, ScrollView, RefreshControl } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import { getCachedData, cacheData } from '../../lib/cache';
 
 type WorkoutSet = {
   weight: number;
@@ -59,7 +59,7 @@ export default function HomeScreen() {
         longestStreak: number;
         workoutsLast7Days: number;
       }>('home_dashboard_data');
-      
+
       if (cached) {
         setRecentWorkouts(cached.recentWorkouts);
         setCurrentStreak(cached.currentStreak);
@@ -87,12 +87,12 @@ export default function HomeScreen() {
         const today = new Date();
         const todayNormalized = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
         const yesterdayNormalized = todayNormalized - 86400000;
-        
+
         const dates = allWorkouts.map(w => {
           const d = new Date(w.start_time);
           return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
         });
-        
+
         const uniqueDatesDesc = Array.from(new Set(dates));
         uniqueDatesDesc.sort((a, b) => b - a);
 
@@ -124,7 +124,7 @@ export default function HomeScreen() {
         if (uniqueDatesDesc.length > 0) {
           let currentLoopStreak = 1;
           for (let i = 0; i < uniqueDatesDesc.length - 1; i++) {
-            if (uniqueDatesDesc[i] - uniqueDatesDesc[i+1] === 86400000) {
+            if (uniqueDatesDesc[i] - uniqueDatesDesc[i + 1] === 86400000) {
               currentLoopStreak++;
             } else {
               if (currentLoopStreak > maxStreak) maxStreak = currentLoopStreak;
@@ -172,7 +172,8 @@ export default function HomeScreen() {
           const exerciseMap = new Map<string, WorkoutExercise>();
           for (const s of (sets || []) as any[]) {
             const exName: string = s.exercises?.name || 'Unknown Exercise';
-            const exCategory: 'Gym' | 'Calisthenics' = s.exercises?.category || 'Gym';
+            const exCategoryRaw = s.exercises?.category || 'Gym';
+            const exCategory: 'Gym' | 'Calisthenics' = (exCategoryRaw === 'Gym' || exCategoryRaw === 'Calisthenics') ? exCategoryRaw : 'Gym';
             if (!exerciseMap.has(exName)) {
               exerciseMap.set(exName, { name: exName, category: exCategory, sets: [] });
             }
@@ -242,8 +243,8 @@ export default function HomeScreen() {
       "Are you sure you want to delete this workout?",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
+        {
+          text: "Delete",
           style: "destructive",
           onPress: async () => {
             try {
@@ -287,7 +288,7 @@ export default function HomeScreen() {
             >
               <Text className="text-blue-400 text-sm">✏️</Text>
             </Pressable>
-            <Pressable 
+            <Pressable
               onPress={() => handleDeleteWorkout(item.id)}
               className="bg-red-500/10 p-2 rounded-lg ml-1"
             >
@@ -333,10 +334,10 @@ export default function HomeScreen() {
   };
 
   return (
-    <ScrollView 
+    <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
-      refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14"/>}
+      refreshControl={<RefreshControl onRefresh={onRefresh} refreshing={refreshing} tintColor="#39FF14" />}
       showsVerticalScrollIndicator={false}
     >
       {/* Header */}
