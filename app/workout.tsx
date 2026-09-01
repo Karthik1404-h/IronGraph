@@ -22,6 +22,8 @@ type SetEntry = {
   reps: string;
   logged: boolean;
   loggedAt?: string;
+  prevWeight?: string;
+  prevReps?: string;
 };
 
 type SelectedExercise = {
@@ -62,6 +64,7 @@ export default function WorkoutScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [workoutId, setWorkoutId] = useState<string | null>(null);
   const editWorkoutId = params.editWorkoutId as string | undefined;
+  const routineId = params.routineId as string | undefined;
 
   const [summaryData, setSummaryData] = useState<{
     duration: string;
@@ -132,6 +135,66 @@ export default function WorkoutScreen() {
     };
     hydrateWorkout();
   }, [editWorkoutId]);
+
+  // Load routine if specified
+  useEffect(() => {
+    if (!routineId || !userId) return;
+    const hydrateRoutine = async () => {
+      setIsLoading(true);
+      try {
+        const { data: routineExercises, error: reErr } = await supabase
+          .from('routine_exercises')
+          .select('*, exercises(*)')
+          .eq('routine_id', routineId)
+          .order('order_index', { ascending: true });
+
+        if (reErr) throw reErr;
+        if (!routineExercises || routineExercises.length === 0) return;
+
+        const mapped: SelectedExercise[] = [];
+        
+        for (const re of routineExercises) {
+          const ex: Exercise = re.exercises;
+          
+          // Fetch historical sets
+          const { data: recentSets } = await supabase
+            .from('workout_sets')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('exercise_id', ex.id)
+            .order('id', { ascending: false })
+            .limit(15);
+            
+          let historicalSets: SetEntry[] = [{ set_number: 1, weight: '', reps: '', logged: false }];
+          
+          if (recentSets && recentSets.length > 0) {
+            const latestWorkoutId = recentSets[0].workout_id;
+            const setsForLatestWorkout = recentSets.filter(s => s.workout_id === latestWorkoutId).reverse();
+            
+            if (setsForLatestWorkout.length > 0) {
+              historicalSets = setsForLatestWorkout.map((s, i) => ({
+                set_number: i + 1,
+                weight: '',
+                reps: '',
+                prevWeight: String(s.weight ?? ''),
+                prevReps: String(s.reps ?? ''),
+                logged: false,
+              }));
+            }
+          }
+          
+          mapped.push({ exercise: ex, sets: historicalSets, pr: null });
+        }
+        
+        setSelectedExercises(mapped);
+      } catch (err: any) {
+        Alert.alert('Error', err.message || 'Failed to load routine.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    hydrateRoutine();
+  }, [routineId, userId]);
 
 
 
@@ -674,7 +737,7 @@ export default function WorkoutScreen() {
                 <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
                   <TextInput
                     style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
-                    placeholder="0"
+                    placeholder={s.prevWeight || "0"}
                     placeholderTextColor="#555555"
                     keyboardType="numeric"
                     value={s.weight}
@@ -698,7 +761,7 @@ export default function WorkoutScreen() {
                 <View style={[styles.cell, { flex: 1.2 }]}>
                   <TextInput
                     style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
-                    placeholder="0"
+                    placeholder={s.prevReps || "0"}
                     placeholderTextColor="#555555"
                     keyboardType="numeric"
                     value={s.reps}

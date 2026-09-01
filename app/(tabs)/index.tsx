@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View, ScrollView, RefreshControl } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { getCachedData, cacheData } from '../../lib/cache';
+import { Routine } from '../../types/routines';
 
 type WorkoutSet = {
   weight: number;
@@ -34,6 +35,44 @@ export default function HomeScreen() {
   const [workoutsLast7Days, setWorkoutsLast7Days] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [expandedWorkouts, setExpandedWorkouts] = useState<Record<string, boolean>>({});
+
+  const toggleExpand = (id: string) => {
+    setExpandedWorkouts(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleRoutineLongPress = (routine: Routine) => {
+    Alert.alert(
+      'Routine Options',
+      `What would you like to do with "${routine.name}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Edit', 
+          onPress: () => {
+            setIsModalVisible(false);
+            router.push({ pathname: '/create-routine', params: { routineId: routine.id } });
+          } 
+        },
+        { 
+          text: 'Delete', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await supabase.from('routines').delete().eq('id', routine.id);
+              if (error) throw error;
+              setRoutines(prev => prev.filter(r => r.id !== routine.id));
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to delete routine');
+            }
+          }
+        },
+      ]
+    );
+  };
+
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -163,7 +202,7 @@ export default function HomeScreen() {
             .from('workout_sets')
             .select('exercise_id, weight, reps, set_number, exercises(name, category)')
             .eq('workout_id', w.id)
-            .order('set_number', { ascending: true });
+            .order('id', { ascending: true });
 
           const uniqueExercises = new Set((sets || []).map((s: any) => s.exercise_id));
           const totalVolume = (sets || []).reduce((sum: number, s: any) => sum + (Number(s.weight) * Number(s.reps)), 0);
@@ -208,6 +247,15 @@ export default function HomeScreen() {
           longestStreak: finalLongestStreak,
           workoutsLast7Days: finalWorkoutsLast7Days,
         });
+      }
+
+      const { data: routinesData } = await supabase
+        .from('routines')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (routinesData) {
+        setRoutines(routinesData);
       }
     } catch (error) {
       console.error('Dashboard fetch error:', error);
@@ -260,18 +308,16 @@ export default function HomeScreen() {
   };
 
   const renderWorkoutItem = ({ item }: { item: RecentWorkout }) => {
-    const visibleExercises = item.exercises.slice(0, 3);
+    const isExpanded = !!expandedWorkouts[item.id];
+    const visibleExercises = isExpanded ? item.exercises : item.exercises.slice(0, 3);
     const hiddenCount = item.exercises.length - visibleExercises.length;
 
-    // Group visible exercises by category
-    const groupedVisible = visibleExercises.reduce((acc, ex) => {
-      if (!acc[ex.category]) acc[ex.category] = [];
-      acc[ex.category].push(ex);
-      return acc;
-    }, {} as Record<string, WorkoutExercise[]>);
-
     return (
-      <View style={styles.workoutCard}>
+      <Pressable 
+        style={styles.workoutCard}
+        onPress={() => router.push({ pathname: '/workout', params: { editWorkoutId: item.id } })}
+        onLongPress={() => handleDeleteWorkout(item.id)}
+      >
         {/* Header Row */}
         <View className="flex-row justify-between items-start mb-2">
           <View>
@@ -280,55 +326,38 @@ export default function HomeScreen() {
               {item.exerciseCount} exercise{item.exerciseCount !== 1 ? 's' : ''} · {item.totalSets} set{item.totalSets !== 1 ? 's' : ''}
             </Text>
           </View>
-          <View className="flex-row items-center gap-2">
-            <Pressable
-              onPress={() => router.push({ pathname: '/workout', params: { editWorkoutId: item.id } })}
-              className="bg-blue-500/10 p-2 rounded-lg"
-            >
-              <Text className="text-blue-400 text-sm">✏️</Text>
-            </Pressable>
-            <Pressable 
-              onPress={() => handleDeleteWorkout(item.id)}
-              className="bg-red-500/10 p-2 rounded-lg ml-1"
-            >
-              <Text className="text-red-500 text-sm">🗑️</Text>
-            </Pressable>
-          </View>
         </View>
 
         {/* Exercise Details */}
         {visibleExercises.length > 0 && (
           <View style={styles.exerciseList}>
-            {Object.entries(groupedVisible).map(([category, exercises], catIdx) => (
-              <View key={category} style={{ marginTop: catIdx > 0 ? 12 : 0 }}>
-                {/* Category Header */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: category === 'Gym' ? '#4DB8FF' : '#FF6B6B', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                    {category === 'Gym' ? '🏋️ Weightlifting' : '🤸 Calisthenics'}
-                  </Text>
-                </View>
-                {exercises.map((ex, idx) => (
-                  <View key={idx} style={[styles.exerciseRow, { marginBottom: idx < exercises.length - 1 ? 10 : 0 }]}>
-                    <Text style={styles.exerciseName}>{ex.name}</Text>
-                    <View style={styles.setsRow}>
-                      {ex.sets.map((set, si) => (
-                        <View key={si} style={styles.setChip}>
-                          <Text style={styles.setChipText}>
-                            {set.weight > 0 ? `${set.weight}kg` : 'BW'} × {set.reps}
-                          </Text>
-                        </View>
-                      ))}
+            {visibleExercises.map((ex, idx) => (
+              <View key={idx} style={[styles.exerciseRow, { marginBottom: idx < visibleExercises.length - 1 ? 10 : 0 }]}>
+                <Text style={styles.exerciseName}>{ex.name}</Text>
+                <View style={styles.setsRow}>
+                  {ex.sets.map((set, si) => (
+                    <View key={si} style={styles.setChip}>
+                      <Text style={styles.setChipText}>
+                        {set.weight > 0 ? `${set.weight}kg` : 'BW'} × {set.reps}
+                      </Text>
                     </View>
-                  </View>
-                ))}
+                  ))}
+                </View>
               </View>
             ))}
-            {hiddenCount > 0 && (
-              <Text style={styles.moreBadge}>+{hiddenCount} more exercise{hiddenCount > 1 ? 's' : ''}</Text>
+            {item.exercises.length > 3 && (
+              <Pressable 
+                onPress={() => toggleExpand(item.id)} 
+                style={{ marginTop: 8, paddingVertical: 4 }}
+              >
+                <Text style={styles.moreBadge}>
+                  {isExpanded ? '- Show less' : `+${hiddenCount} more exercise${hiddenCount !== 1 ? 's' : ''}`}
+                </Text>
+              </Pressable>
             )}
           </View>
         )}
-      </View>
+      </Pressable>
     );
   };
 
@@ -360,18 +389,34 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Clean, Prominent 'Add a Workout' CTA with directional arrow */}
+      {/* Log a Workout Button */}
       <Pressable
         style={({ pressed }) => pressed ? [styles.addWorkoutBtn, styles.addWorkoutBtnPressed] : styles.addWorkoutBtn}
-        onPress={() => router.push('/workout')}
+        onPress={() => setIsModalVisible(true)}
       >
         <View style={styles.addWorkoutInner}>
           <View>
-            <Text style={styles.addWorkoutText}>Add a Workout</Text>
-            <Text style={styles.addWorkoutSub}>Start a new session</Text>
+            <Text style={styles.addWorkoutText}>Log a Workout</Text>
+            <Text style={styles.addWorkoutSub}>Start a session or pick a routine</Text>
           </View>
           <View style={styles.chevronCircle}>
             <Text style={styles.chevronIcon}>›</Text>
+          </View>
+        </View>
+      </Pressable>
+
+      {/* Create a Routine Button */}
+      <Pressable
+        style={({ pressed }) => pressed ? [styles.addWorkoutBtn, styles.addWorkoutBtnPressed] : styles.addWorkoutBtn}
+        onPress={() => router.push('/create-routine')}
+      >
+        <View style={styles.addWorkoutInner}>
+          <View>
+            <Text style={styles.addWorkoutText}>Create a Routine</Text>
+            <Text style={styles.addWorkoutSub}>Build a new custom template</Text>
+          </View>
+          <View style={styles.chevronCircle}>
+            <Text style={styles.chevronIcon}>+</Text>
           </View>
         </View>
       </Pressable>
@@ -399,7 +444,54 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Modal Removed */}
+      {/* Log Workout Modal */}
+      <Modal
+        visible={isModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setIsModalVisible(false)}
+      >
+        <View className="flex-1 bg-black/90 justify-end">
+          <View className="bg-[#141414] rounded-t-[32px] p-6 pb-12 border-t border-[#222222]">
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-2xl font-bold text-white">Log a Workout</Text>
+              <Pressable onPress={() => setIsModalVisible(false)} className="p-2">
+                <Text className="text-gray-400 text-lg font-bold">✕</Text>
+              </Pressable>
+            </View>
+            
+            <Pressable
+              className="bg-[#39FF14] p-4 rounded-2xl flex-row items-center justify-center mb-6"
+              onPress={() => {
+                setIsModalVisible(false);
+                router.push('/workout');
+              }}
+            >
+              <Text className="text-black font-bold text-lg">+ Start Empty Workout</Text>
+            </Pressable>
+
+            {routines.length > 0 && (
+              <View className="mb-4">
+                <Text className="text-gray-400 text-sm font-bold uppercase tracking-wider mt-4 mb-4 ml-1">Your Routines</Text>
+                {routines.map(routine => (
+                  <Pressable
+                    key={routine.id}
+                    className="bg-[#222222] p-4 rounded-2xl flex-row items-center justify-between mb-3"
+                    onPress={() => {
+                      setIsModalVisible(false);
+                      router.push({ pathname: '/workout', params: { routineId: routine.id } });
+                    }}
+                    onLongPress={() => handleRoutineLongPress(routine)}
+                  >
+                    <Text className="text-white text-lg font-bold">{routine.name}</Text>
+                    <Text className="text-gray-500 text-xl">›</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
