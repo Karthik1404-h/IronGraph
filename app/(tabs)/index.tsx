@@ -1,9 +1,8 @@
 import { cacheData, getCachedData } from '@/lib/cache';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import { getCachedData, cacheData } from '../../lib/cache';
 import { Routine } from '../../types/routines';
 
 type WorkoutSet = {
@@ -54,6 +53,7 @@ export default function HomeScreen() {
           text: 'Edit', 
           onPress: () => {
             setIsModalVisible(false);
+            // @ts-ignore - Expo router types will regenerate on start
             router.push({ pathname: '/create-routine', params: { routineId: routine.id } });
           } 
         },
@@ -411,6 +411,7 @@ export default function HomeScreen() {
       {/* Create a Routine Button */}
       <Pressable
         style={({ pressed }) => pressed ? [styles.addWorkoutBtn, styles.addWorkoutBtnPressed] : styles.addWorkoutBtn}
+        // @ts-ignore - Expo router types will regenerate on start
         onPress={() => router.push('/create-routine')}
       >
         <View style={styles.addWorkoutInner}>

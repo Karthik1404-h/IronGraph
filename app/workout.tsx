@@ -621,6 +621,20 @@ export default function WorkoutScreen() {
     return `${hour12}:${m} ${ampm}`;
   };
 
+  const filteredAvailableExercises = useMemo(() => {
+    const normalizedSearch = exerciseSearchQuery.toLowerCase().replace(/[\s-]/g, '');
+
+    return availableExercises.filter(ex => {
+      const normalizedName = ex.name.toLowerCase().replace(/[\s-]/g, '');
+      if (!normalizedName.includes(normalizedSearch)) return false;
+      
+      if (selectedCategory === 'All') return true;
+      if (selectedCategory === 'Calisthenics') return ex.equipment === 'body weight' || ex.category === 'Calisthenics';
+      if (selectedCategory === 'Gym') return (ex.equipment && ex.equipment !== 'body weight') || ex.category === 'Gym';
+      return ex.category?.toLowerCase() === selectedCategory.toLowerCase();
+    });
+  }, [availableExercises, exerciseSearchQuery, selectedCategory]);
+
   if (isFinished && summaryData) {
     return (
       <View style={styles.container}>
@@ -705,20 +719,6 @@ export default function WorkoutScreen() {
       </View>
     );
   }
-
-  const filteredAvailableExercises = useMemo(() => {
-    const normalizedSearch = exerciseSearchQuery.toLowerCase().replace(/[\s-]/g, '');
-
-    return availableExercises.filter(ex => {
-      const normalizedName = ex.name.toLowerCase().replace(/[\s-]/g, '');
-      if (!normalizedName.includes(normalizedSearch)) return false;
-      
-      if (selectedCategory === 'All') return true;
-      if (selectedCategory === 'Calisthenics') return ex.equipment === 'body weight' || ex.category === 'Calisthenics';
-      if (selectedCategory === 'Gym') return (ex.equipment && ex.equipment !== 'body weight') || ex.category === 'Gym';
-      return ex.category?.toLowerCase() === selectedCategory.toLowerCase();
-    });
-  }, [availableExercises, exerciseSearchQuery, selectedCategory]);
 
   return (
     <KeyboardAvoidingView
