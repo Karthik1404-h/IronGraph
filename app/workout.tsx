@@ -63,6 +63,9 @@ export default function WorkoutScreen() {
   const params = useLocalSearchParams();
   const [selectedCategory, setSelectedCategory] = useState('All');
 
+  const [workoutDate, setWorkoutDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
   const [availableExercises, setAvailableExercises] = useState<Exercise[]>([]);
   const [selectedExercises, setSelectedExercises] = useState<SelectedExercise[]>([]);
   const [showExerciseModal, setShowExerciseModal] = useState(false);
@@ -119,11 +122,21 @@ export default function WorkoutScreen() {
     const hydrateWorkout = async () => {
       setIsLoading(true);
       try {
+        const { data: workoutData, error: workoutErr } = await supabase
+          .from('workouts')
+          .select('start_time')
+          .eq('id', editWorkoutId)
+          .single();
+        if (!workoutErr && workoutData?.start_time) {
+          setWorkoutDate(new Date(workoutData.start_time));
+        }
+
         // Fetch workout_sets joined with exercise data
         const { data: sets, error } = await supabase
           .from('workout_sets')
           .select('*, exercises(*)')
           .eq('workout_id', editWorkoutId)
+          .order('exercise_order', { ascending: true })
           .order('set_number', { ascending: true });
 
         if (error) throw error;
@@ -403,7 +416,8 @@ export default function WorkoutScreen() {
     }
 
     const setsToSave: any[] = [];
-    for (const se of selectedExercises) {
+    for (let exIdx = 0; exIdx < selectedExercises.length; exIdx++) {
+      const se = selectedExercises[exIdx];
       for (const s of se.sets) {
         const w = parseFloat(s.weight) || 0;
         const r = parseInt(s.reps) || 0;
@@ -415,6 +429,7 @@ export default function WorkoutScreen() {
             set_number: s.set_number,
             weight: w,
             reps: r,
+            exercise_order: exIdx,
           });
         }
       }
@@ -429,7 +444,13 @@ export default function WorkoutScreen() {
     setIsLoading(true);
     try {
       await supabase.from('workout_sets').insert(setsToSave);
-      await supabase.from('workouts').update({ end_time: new Date().toISOString() }).eq('id', workoutId);
+      
+      const updatePayload: any = { start_time: workoutDate.toISOString() };
+      if (!editWorkoutId) {
+        updatePayload.end_time = new Date().toISOString();
+      }
+      
+      await supabase.from('workouts').update(updatePayload).eq('id', workoutId);
       router.back();
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save workout.');
@@ -448,7 +469,8 @@ export default function WorkoutScreen() {
     setIsLoading(true);
     try {
       const allSets: any[] = [];
-      for (const se of selectedExercises) {
+      for (let exIdx = 0; exIdx < selectedExercises.length; exIdx++) {
+        const se = selectedExercises[exIdx];
         for (const s of se.sets) {
           const w = parseFloat(s.weight) || 0;
           const r = parseInt(s.reps) || 0;
@@ -460,6 +482,7 @@ export default function WorkoutScreen() {
               set_number: s.set_number,
               weight: w,
               reps: r,
+              exercise_order: exIdx,
             });
           }
         }
@@ -484,7 +507,7 @@ export default function WorkoutScreen() {
 
         await supabase
           .from('workouts')
-          .update({ end_time: new Date().toISOString() })
+          .update({ start_time: workoutDate.toISOString(), end_time: new Date().toISOString() })
           .eq('id', editWorkoutId);
 
         router.back();
@@ -497,7 +520,7 @@ export default function WorkoutScreen() {
 
       const { error: updateErr } = await supabase
         .from('workouts')
-        .update({ end_time: new Date().toISOString() })
+        .update({ start_time: workoutDate.toISOString(), end_time: new Date().toISOString() })
         .eq('id', workoutId);
       if (updateErr) throw updateErr;
 
@@ -635,6 +658,26 @@ export default function WorkoutScreen() {
     });
   }, [availableExercises, exerciseSearchQuery, selectedCategory]);
 
+  const pastDates = useMemo(() => {
+    const dates = [];
+    const today = new Date();
+    for (let i = 0; i < 90; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      dates.push(d);
+    }
+    return dates;
+  }, []);
+
+  const formatDateDisplay = (d: Date) => {
+    const today = new Date();
+    const diff = today.getTime() - d.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0 && today.getDate() === d.getDate()) return 'Today';
+    if (days === 1 || (days === 0 && today.getDate() !== d.getDate())) return 'Yesterday';
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
   if (isFinished && summaryData) {
     return (
       <View style={styles.container}>
@@ -733,9 +776,16 @@ export default function WorkoutScreen() {
         >
           <Text className="text-white font-bold text-base">Cancel</Text>
         </Pressable>
-        <Text className="text-white font-semibold text-base">
-          {editWorkoutId ? 'Edit Workout' : 'New Workout'}
-        </Text>
+        
+        <Pressable onPress={() => setShowDatePicker(true)} className="items-center">
+          <Text className="text-white font-semibold text-base">
+            {editWorkoutId ? 'Edit Workout' : 'New Workout'}
+          </Text>
+          <Text className="text-[#39FF14] text-xs mt-1 font-bold">
+            {formatDateDisplay(workoutDate)} ▾
+          </Text>
+        </Pressable>
+
         <Pressable
           onPress={finishWorkout}
           className="bg-[#39FF14] px-4 py-2 rounded-full"
@@ -1005,6 +1055,51 @@ export default function WorkoutScreen() {
                   <Text style={styles.weightGridText}>{item} kg</Text>
                 </Pressable>
               )}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal: Date Picker */}
+      <Modal
+        visible={showDatePicker}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '60%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Workout Date</Text>
+              <Pressable onPress={() => setShowDatePicker(false)} style={styles.modalCloseBtn}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
+            </View>
+
+            <FlatList
+              data={pastDates}
+              keyExtractor={(item) => item.toISOString()}
+              contentContainerStyle={{ paddingBottom: 20 }}
+              renderItem={({ item }) => {
+                const isSelected = item.getDate() === workoutDate.getDate() && item.getMonth() === workoutDate.getMonth() && item.getFullYear() === workoutDate.getFullYear();
+                return (
+                  <Pressable
+                    style={[
+                      styles.exerciseSelectItem,
+                      isSelected && { borderColor: '#39FF14', backgroundColor: '#0D1A0D' }
+                    ]}
+                    onPress={() => {
+                      setWorkoutDate(item);
+                      setShowDatePicker(false);
+                    }}
+                  >
+                    <Text style={[styles.exerciseSelectText, isSelected && { color: '#39FF14', fontWeight: 'bold' }]}>
+                      {formatDateDisplay(item)}
+                    </Text>
+                    {isSelected && <Text style={{ color: '#39FF14', fontSize: 18, fontWeight: 'bold' }}>✓</Text>}
+                  </Pressable>
+                );
+              }}
             />
           </View>
         </View>

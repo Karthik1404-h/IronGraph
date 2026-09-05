@@ -201,9 +201,10 @@ export default function HomeScreen() {
         for (const w of workouts) {
           const { data: sets } = await supabase
             .from('workout_sets')
-            .select('exercise_id, weight, reps, set_number, exercises(name, category)')
+            .select('exercise_id, weight, reps, set_number, exercise_order, exercises(name, category)')
             .eq('workout_id', w.id)
-            .order('id', { ascending: true });
+            .order('exercise_order', { ascending: true })
+            .order('set_number', { ascending: true });
 
           const uniqueExercises = new Set((sets || []).map((s: any) => s.exercise_id));
           const totalVolume = (sets || []).reduce((sum: number, s: any) => sum + (Number(s.weight) * Number(s.reps)), 0);

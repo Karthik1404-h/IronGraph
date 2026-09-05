@@ -193,5 +193,5 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 ---
 
 <div align="center">
-  <b>Built with 💪 by <a href="https://github.com/Karthik1404-h">Karthik1404-h</a></b>
+  <b>Built with 💪 by <a href="https://github.com/Karthik1404-h">Guru Karthikeya</a> and <a href="https://github.com/LOHITH5506H">Lohith</a></b>
 </div>
