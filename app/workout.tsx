@@ -42,6 +42,86 @@ type SelectedExercise = {
   pr: { weight: number; reps: number } | null;
 };
 
+const formatPRDisplay = (pr: { weight: number; reps: number }) => {
+  if (pr.weight > 0) {
+    return `${pr.weight} kg × ${pr.reps} reps`;
+  }
+  return `BW × ${pr.reps} reps`;
+};
+
+const isBetterRecord = (
+  newWeight: number,
+  newReps: number,
+  basePr: { weight: number; reps: number } | null
+): boolean => {
+  if (newWeight <= 0 && newReps <= 0) return false;
+  if (!basePr) return true;
+
+  if (newWeight > 0 && basePr.weight > 0) {
+    if (newWeight > basePr.weight) return true;
+    if (newWeight === basePr.weight && newReps > basePr.reps) return true;
+    return false;
+  }
+
+  if (newWeight > 0 && basePr.weight === 0) return true;
+  if (newWeight === 0 && basePr.weight > 0) return false;
+
+  // Both bodyweight (weight = 0)
+  return newReps > basePr.reps;
+};
+
+const fetchExercisePR = async (
+  exercise: Exercise,
+  uid: string,
+  excludeWorkoutId?: string | null
+): Promise<{ weight: number; reps: number } | null> => {
+  try {
+    const { data: matchingExercises } = await supabase
+      .from('exercises')
+      .select('id')
+      .ilike('name', exercise.name.trim());
+
+    const exIds = matchingExercises && matchingExercises.length > 0
+      ? matchingExercises.map(e => e.id)
+      : [exercise.id];
+    if (!exIds.includes(exercise.id)) {
+      exIds.push(exercise.id);
+    }
+
+    let query = supabase
+      .from('workout_sets')
+      .select('weight, reps')
+      .eq('user_id', uid)
+      .in('exercise_id', exIds);
+
+    if (excludeWorkoutId) {
+      query = query.neq('workout_id', excludeWorkoutId);
+    }
+
+    const { data: bestSets, error } = await query
+      .order('weight', { ascending: false })
+      .order('reps', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('Error fetching PR:', error.message);
+      return null;
+    }
+
+    if (bestSets && bestSets.length > 0) {
+      const w = Number(bestSets[0].weight) || 0;
+      const r = Number(bestSets[0].reps) || 0;
+      if (w > 0 || r > 0) {
+        return { weight: w, reps: r };
+      }
+    }
+    return null;
+  } catch (err: any) {
+    console.error('Failed to fetch exercise PR:', err);
+    return null;
+  }
+};
+
 const STANDARD_WEIGHTS = ['0', '2.5', '5', '7.5', '10', '12.5', '15', '17.5', '20', '22.5', '25', '30', '35', '40', '45', '50', '60', '70', '80', '90', '100', '120', '140', '160', '180', '200'];
 
 const DEFAULT_GYM: string[] = [
@@ -157,7 +237,15 @@ export default function WorkoutScreen() {
             loggedAt: s.created_at,
           });
         }
-        setSelectedExercises(Array.from(exerciseMap.values()));
+
+        const uid = userId || (await supabase.auth.getUser()).data.user?.id;
+        const exerciseList = Array.from(exerciseMap.values());
+        if (uid) {
+          for (const item of exerciseList) {
+            item.pr = await fetchExercisePR(item.exercise, uid, editWorkoutId);
+          }
+        }
+        setSelectedExercises(exerciseList);
         setWorkoutId(editWorkoutId);
       } catch (err: any) {
         Alert.alert('Error', err.message || 'Failed to load workout for editing.');
@@ -184,16 +272,27 @@ export default function WorkoutScreen() {
         if (!routineExercises || routineExercises.length === 0) return;
 
         const mapped: SelectedExercise[] = [];
+        const uid = userId || (await supabase.auth.getUser()).data.user?.id;
         
         for (const re of routineExercises) {
           const ex: Exercise = re.exercises;
           
+          // Match all exercise IDs with the same name to prevent missing history
+          const { data: matchingExercises } = await supabase
+            .from('exercises')
+            .select('id')
+            .ilike('name', ex.name.trim());
+          const exIds = matchingExercises && matchingExercises.length > 0
+            ? matchingExercises.map(e => e.id)
+            : [ex.id];
+          if (!exIds.includes(ex.id)) exIds.push(ex.id);
+
           // Fetch historical sets
           const { data: recentSets } = await supabase
             .from('workout_sets')
             .select('*')
-            .eq('user_id', userId)
-            .eq('exercise_id', ex.id)
+            .eq('user_id', uid)
+            .in('exercise_id', exIds)
             .order('id', { ascending: false })
             .limit(15);
             
@@ -215,7 +314,8 @@ export default function WorkoutScreen() {
             }
           }
           
-          mapped.push({ exercise: ex, sets: historicalSets, pr: null });
+          const pr = uid ? await fetchExercisePR(ex, uid) : null;
+          mapped.push({ exercise: ex, sets: historicalSets, pr });
         }
         
         setSelectedExercises(mapped);
@@ -317,7 +417,8 @@ export default function WorkoutScreen() {
 
   const handleSelectExerciseToAdd = async (ex: Exercise) => {
     setShowExerciseModal(false);
-    if (!userId) return;
+    const uid = userId || (await supabase.auth.getUser()).data.user?.id;
+    if (!uid) return;
 
     // Check if already added
     if (selectedExercises.some(se => se.exercise.id === ex.id)) {
@@ -328,17 +429,7 @@ export default function WorkoutScreen() {
     setIsLoading(true);
     try {
       // Fetch historical PR for this exercise
-      const { data: bestSets } = await supabase
-        .from('workout_sets')
-        .select('weight, reps')
-        .eq('exercise_id', ex.id)
-        .eq('user_id', userId)
-        .order('weight', { ascending: false })
-        .limit(1);
-
-      const pr = bestSets && bestSets.length > 0
-        ? { weight: Number(bestSets[0].weight), reps: Number(bestSets[0].reps) }
-        : null;
+      const pr = await fetchExercisePR(ex, uid);
 
       // Automatically generate 2 standard sets by default
       const initialSets: SetEntry[] = [
@@ -527,15 +618,21 @@ export default function WorkoutScreen() {
       // Compute new PRs
       const newPRs: string[] = [];
       for (const se of selectedExercises) {
+        let bestInWorkout: { weight: number; reps: number } | null = null;
         for (const s of se.sets) {
           const w = parseFloat(s.weight) || 0;
-          if (se.pr && w > se.pr.weight) {
-            if (!newPRs.includes(se.exercise.name)) newPRs.push(se.exercise.name);
-            break;
+          const r = parseInt(s.reps) || 0;
+          if (w <= 0 && r <= 0) continue;
+          if (!bestInWorkout || isBetterRecord(w, r, bestInWorkout)) {
+            bestInWorkout = { weight: w, reps: r };
           }
-          if (!se.pr && w > 0) {
-            if (!newPRs.includes(se.exercise.name)) newPRs.push(se.exercise.name);
-            break;
+        }
+
+        if (bestInWorkout && isBetterRecord(bestInWorkout.weight, bestInWorkout.reps, se.pr)) {
+          const prDetail = formatPRDisplay(bestInWorkout);
+          const prLabel = `${se.exercise.name} (${prDetail})`;
+          if (!newPRs.includes(prLabel)) {
+            newPRs.push(prLabel);
           }
         }
       }
@@ -809,117 +906,153 @@ export default function WorkoutScreen() {
           </View>
         )}
 
-        {selectedExercises.map((se, exIdx) => (
-          <View key={se.exercise.id} style={styles.exerciseCard}>
-            {/* Card Header with PR and Delete */}
-            <View style={styles.cardHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.exerciseTitle}>{se.exercise.name}</Text>
-                {se.pr ? (
-                  <View style={styles.prBadge}>
-                    <Text style={styles.prBadgeText}>
-                      🏆 PR: {se.pr.weight} kg × {se.pr.reps} reps
-                    </Text>
-                  </View>
-                ) : (
-                  <Text style={styles.noPrText}>No historical PR logged yet</Text>
-                )}
-              </View>
-              <Pressable onPress={() => removeExerciseFromSession(exIdx)} style={styles.removeExBtn}>
-                <Text style={styles.removeExText}>✕</Text>
-              </Pressable>
-            </View>
+        {selectedExercises.map((se, exIdx) => {
+          // Find best logged set in current session
+          let bestLogged: { weight: number; reps: number } | null = null;
+          for (const s of se.sets) {
+            if (!s.logged) continue;
+            const w = parseFloat(s.weight) || 0;
+            const r = parseInt(s.reps) || 0;
+            if (w <= 0 && r <= 0) continue;
+            if (!bestLogged || isBetterRecord(w, r, bestLogged)) {
+              bestLogged = { weight: w, reps: r };
+            }
+          }
 
-            {/* Set Table Headers */}
-            <View style={styles.tableHeaderRow}>
-              <Text style={[styles.headerCell, { flex: 0.6 }]}>SET</Text>
-              <Text style={[styles.headerCell, { flex: 2 }]}>WEIGHT (KG)</Text>
-              <Text style={[styles.headerCell, { flex: 1.2 }]}>REPS</Text>
-              <Text style={[styles.headerCell, { width: 54 }]}>LOG</Text>
-              <View style={{ width: 28 }} />
-            </View>
+          const hasNewPR = bestLogged && isBetterRecord(bestLogged.weight, bestLogged.reps, se.pr);
+          const displayPR = hasNewPR ? bestLogged : se.pr;
 
-            {/* Set Rows */}
-            {se.sets.map((s, setIdx) => (
-              <View key={setIdx} style={[styles.tableRow, s.logged && styles.tableRowLogged]}>
-                <View style={[styles.cell, { flex: 0.6 }]}>
-                  <Text style={[styles.setNumText, s.logged && styles.setNumLogged]}>{s.set_number}</Text>
-                </View>
-
-                <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
-                  <TextInput
-                    style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
-                    placeholder={s.prevWeight || "0"}
-                    placeholderTextColor="#555555"
-                    keyboardType="numeric"
-                    value={s.weight}
-                    onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'weight', val); }}
-                    editable={!s.logged}
-                  />
-                  <Pressable
-                    style={[styles.pickerBtn, s.logged && { opacity: 0.35 }]}
-                    onPress={() => {
-                      if (!s.logged) {
-                        setPickerTarget({ exIdx, setIdx });
-                        setShowWeightPickerModal(true);
-                      }
-                    }}
-                    disabled={s.logged}
-                  >
-                    <Text style={styles.pickerBtnText}>▼</Text>
-                  </Pressable>
-                </View>
-
-                <View style={[styles.cell, { flex: 1.2 }]}>
-                  <TextInput
-                    style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
-                    placeholder={s.prevReps || "0"}
-                    placeholderTextColor="#555555"
-                    keyboardType="numeric"
-                    value={s.reps}
-                    onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'reps', val); }}
-                    editable={!s.logged}
-                  />
-                </View>
-
-                <View style={{ width: 54, alignItems: 'center', justifyContent: 'center' }}>
-                  {s.logged ? (
-                    <View style={styles.loggedBadge}>
-                      <Text style={styles.loggedBadgeText}>✓</Text>
+          return (
+            <View key={se.exercise.id} style={styles.exerciseCard}>
+              {/* Card Header with PR and Delete */}
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.exerciseTitle}>{se.exercise.name}</Text>
+                  {hasNewPR ? (
+                    <View style={[styles.prBadge, styles.prBadgeNew]}>
+                      <Text style={styles.prBadgeNewText}>
+                        🏆 New PR: {formatPRDisplay(displayPR!)}
+                      </Text>
+                    </View>
+                  ) : displayPR ? (
+                    <View style={styles.prBadge}>
+                      <Text style={styles.prBadgeText}>
+                        🏆 PR: {formatPRDisplay(displayPR)}
+                      </Text>
                     </View>
                   ) : (
-                    <Pressable
-                      style={({ pressed }) => [styles.logSetBtn, pressed && { opacity: 0.7 }]}
-                      onPress={() => logSet(exIdx, setIdx)}
-                    >
-                      <Text style={styles.logSetText}>Log</Text>
-                    </Pressable>
+                    <Text style={styles.noPrText}>No historical PR logged yet</Text>
                   )}
                 </View>
-
-                <View style={{ width: 28, alignItems: 'center' }}>
-                  {se.sets.length > 1 && (
-                    <Pressable style={styles.deleteSetBtn} onPress={() => removeSet(exIdx, setIdx)}>
-                      <Text style={styles.deleteSetText}>−</Text>
-                    </Pressable>
-                  )}
-                </View>
+                <Pressable onPress={() => removeExerciseFromSession(exIdx)} style={styles.removeExBtn}>
+                  <Text style={styles.removeExText}>✕</Text>
+                </Pressable>
               </View>
-            ))}
 
-            {/* Add Set row */}
-            <View style={styles.cardActionsRow}>
-              <Pressable
-                style={({ pressed }) =>
-                  pressed ? [styles.addSetBtn, { opacity: 0.7 }] : styles.addSetBtn
-                }
-                onPress={() => addSet(exIdx)}
-              >
-                <Text style={styles.addSetText}>＋ Add Set</Text>
-              </Pressable>
+              {/* Set Table Headers */}
+              <View style={styles.tableHeaderRow}>
+                <Text style={[styles.headerCell, { flex: 0.6 }]}>SET</Text>
+                <Text style={[styles.headerCell, { flex: 2 }]}>WEIGHT (KG)</Text>
+                <Text style={[styles.headerCell, { flex: 1.2 }]}>REPS</Text>
+                <Text style={[styles.headerCell, { width: 54 }]}>LOG</Text>
+                <View style={{ width: 28 }} />
+              </View>
+
+              {/* Set Rows */}
+              {se.sets.map((s, setIdx) => (
+                <View key={setIdx} style={[styles.tableRow, s.logged && styles.tableRowLogged]}>
+                  <View style={[styles.cell, { flex: 0.6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}>
+                    <Text style={[styles.setNumText, s.logged && styles.setNumLogged]}>{s.set_number}</Text>
+                    {(() => {
+                      if (!s.logged) return null;
+                      const w = parseFloat(s.weight) || 0;
+                      const r = parseInt(s.reps) || 0;
+                      if (isBetterRecord(w, r, se.pr)) {
+                        return (
+                          <View style={styles.prChip}>
+                            <Text style={styles.prChipText}>PR</Text>
+                          </View>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </View>
+
+                  <View style={[styles.cell, { flex: 2, flexDirection: 'row', gap: 6 }]}>
+                    <TextInput
+                      style={[styles.inputField, { flex: 1 }, s.logged && styles.inputFieldLogged]}
+                      placeholder={s.prevWeight || "0"}
+                      placeholderTextColor="#555555"
+                      keyboardType="numeric"
+                      value={s.weight}
+                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'weight', val); }}
+                      editable={!s.logged}
+                    />
+                    <Pressable
+                      style={[styles.pickerBtn, s.logged && { opacity: 0.35 }]}
+                      onPress={() => {
+                        if (!s.logged) {
+                          setPickerTarget({ exIdx, setIdx });
+                          setShowWeightPickerModal(true);
+                        }
+                      }}
+                      disabled={s.logged}
+                    >
+                      <Text style={styles.pickerBtnText}>▼</Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={[styles.cell, { flex: 1.2 }]}>
+                    <TextInput
+                      style={[styles.inputField, { width: '100%' }, s.logged && styles.inputFieldLogged]}
+                      placeholder={s.prevReps || "0"}
+                      placeholderTextColor="#555555"
+                      keyboardType="numeric"
+                      value={s.reps}
+                      onChangeText={(val) => { if (!s.logged) updateSet(exIdx, setIdx, 'reps', val); }}
+                      editable={!s.logged}
+                    />
+                  </View>
+
+                  <View style={{ width: 54, alignItems: 'center', justifyContent: 'center' }}>
+                    {s.logged ? (
+                      <View style={styles.loggedBadge}>
+                        <Text style={styles.loggedBadgeText}>✓</Text>
+                      </View>
+                    ) : (
+                      <Pressable
+                        style={({ pressed }) => [styles.logSetBtn, pressed && { opacity: 0.7 }]}
+                        onPress={() => logSet(exIdx, setIdx)}
+                      >
+                        <Text style={styles.logSetText}>Log</Text>
+                      </Pressable>
+                    )}
+                  </View>
+
+                  <View style={{ width: 28, alignItems: 'center' }}>
+                    {se.sets.length > 1 && (
+                      <Pressable style={styles.deleteSetBtn} onPress={() => removeSet(exIdx, setIdx)}>
+                        <Text style={styles.deleteSetText}>−</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              ))}
+
+              {/* Add Set row */}
+              <View style={styles.cardActionsRow}>
+                <Pressable
+                  style={({ pressed }) =>
+                    pressed ? [styles.addSetBtn, { opacity: 0.7 }] : styles.addSetBtn
+                  }
+                  onPress={() => addSet(exIdx)}
+                >
+                  <Text style={styles.addSetText}>＋ Add Set</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
 
         {/* Add Exercise button inside ScrollView */}
         <Pressable
@@ -1267,7 +1400,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#39FF1440',
   },
+  prBadgeNew: {
+    backgroundColor: '#0D2B0D',
+    borderColor: '#39FF14',
+    borderWidth: 1.5,
+  },
   prBadgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#39FF14',
+  },
+  prBadgeNewText: {
     fontSize: 12,
     fontWeight: 'bold',
     color: '#39FF14',
@@ -1276,6 +1419,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666666',
     fontStyle: 'italic',
+  },
+  prChip: {
+    backgroundColor: '#39FF14',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 4,
+  },
+  prChipText: {
+    color: '#000000',
+    fontSize: 9,
+    fontWeight: '900',
   },
   removeExBtn: {
     padding: 4,
