@@ -1,7 +1,7 @@
 import { cacheData, getCachedData } from '@/lib/cache';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { Routine } from '../../types/routines';
 
@@ -27,9 +27,70 @@ type RecentWorkout = {
   exercises: WorkoutExercise[];
 };
 
+const enrichWorkouts = async (workouts: any[]): Promise<RecentWorkout[]> => {
+  if (!workouts || workouts.length === 0) return [];
+  const workoutIds = workouts.map(w => w.id);
+
+  const { data: allSets, error: setsErr } = await supabase
+    .from('workout_sets')
+    .select('workout_id, exercise_id, weight, reps, set_number, exercise_order, exercises(name, category)')
+    .in('workout_id', workoutIds)
+    .order('exercise_order', { ascending: true })
+    .order('set_number', { ascending: true });
+
+  if (setsErr) {
+    console.error('Error fetching workout sets in batch:', setsErr);
+    return [];
+  }
+
+  const setsByWorkout = new Map<string, any[]>();
+  for (const s of (allSets || [])) {
+    if (!setsByWorkout.has(s.workout_id)) {
+      setsByWorkout.set(s.workout_id, []);
+    }
+    setsByWorkout.get(s.workout_id)!.push(s);
+  }
+
+  return workouts.map(w => {
+    const sets = setsByWorkout.get(w.id) || [];
+    const uniqueExercises = new Set(sets.map((s: any) => s.exercise_id));
+    const totalVolume = sets.reduce((sum: number, s: any) => sum + (Number(s.weight) * Number(s.reps)), 0);
+
+    const exerciseMap = new Map<string, WorkoutExercise>();
+    for (const s of sets) {
+      const exName: string = s.exercises?.name || 'Unknown Exercise';
+      const exCategoryRaw = s.exercises?.category || 'Gym';
+      const exCategory: 'Gym' | 'Calisthenics' = (exCategoryRaw === 'Gym' || exCategoryRaw === 'Calisthenics') ? exCategoryRaw : 'Gym';
+      if (!exerciseMap.has(exName)) {
+        exerciseMap.set(exName, { name: exName, category: exCategory, sets: [] });
+      }
+      exerciseMap.get(exName)!.sets.push({
+        weight: Number(s.weight),
+        reps: Number(s.reps),
+        setNumber: Number(s.set_number),
+      });
+    }
+
+    return {
+      id: w.id,
+      start_time: w.start_time,
+      end_time: w.end_time,
+      exerciseCount: uniqueExercises.size,
+      totalSets: sets.length,
+      totalVolume,
+      exercises: Array.from(exerciseMap.values()),
+    };
+  });
+};
+
 export default function HomeScreen() {
   const router = useRouter();
   const [recentWorkouts, setRecentWorkouts] = useState<RecentWorkout[]>([]);
+  const [showingAllWorkouts, setShowingAllWorkouts] = useState(false);
+  const [allWorkouts, setAllWorkouts] = useState<RecentWorkout[]>([]);
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
+  const [totalWorkoutsCount, setTotalWorkoutsCount] = useState(0);
+  const [workoutSearchQuery, setWorkoutSearchQuery] = useState('');
   const [currentStreak, setCurrentStreak] = useState(0);
   const [longestStreak, setLongestStreak] = useState(0);
   const [workoutsLast7Days, setWorkoutsLast7Days] = useState(0);
@@ -79,10 +140,13 @@ export default function HomeScreen() {
     setRefreshing(true);
     try {
       await fetchDashboardData();
+      if (showingAllWorkouts) {
+        await fetchAllWorkouts();
+      }
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [showingAllWorkouts]);
 
   useFocusEffect(
     useCallback(() => {
@@ -182,10 +246,12 @@ export default function HomeScreen() {
         const last7DaysCount = allWorkouts.filter(w => new Date(w.start_time).getTime() >= sevenDaysAgo).length;
         finalWorkoutsLast7Days = last7DaysCount;
         setWorkoutsLast7Days(last7DaysCount);
+        setTotalWorkoutsCount(allWorkouts.length);
       } else {
         setCurrentStreak(0);
         setLongestStreak(0);
         setWorkoutsLast7Days(0);
+        setTotalWorkoutsCount(0);
       }
 
       const { data: workouts } = await supabase
@@ -197,44 +263,7 @@ export default function HomeScreen() {
         .limit(5);
 
       if (workouts && workouts.length > 0) {
-        const enriched: RecentWorkout[] = [];
-        for (const w of workouts) {
-          const { data: sets } = await supabase
-            .from('workout_sets')
-            .select('exercise_id, weight, reps, set_number, exercise_order, exercises(name, category)')
-            .eq('workout_id', w.id)
-            .order('exercise_order', { ascending: true })
-            .order('set_number', { ascending: true });
-
-          const uniqueExercises = new Set((sets || []).map((s: any) => s.exercise_id));
-          const totalVolume = (sets || []).reduce((sum: number, s: any) => sum + (Number(s.weight) * Number(s.reps)), 0);
-
-          // Group sets by exercise name
-          const exerciseMap = new Map<string, WorkoutExercise>();
-          for (const s of (sets || []) as any[]) {
-            const exName: string = s.exercises?.name || 'Unknown Exercise';
-            const exCategoryRaw = s.exercises?.category || 'Gym';
-            const exCategory: 'Gym' | 'Calisthenics' = (exCategoryRaw === 'Gym' || exCategoryRaw === 'Calisthenics') ? exCategoryRaw : 'Gym';
-            if (!exerciseMap.has(exName)) {
-              exerciseMap.set(exName, { name: exName, category: exCategory, sets: [] });
-            }
-            exerciseMap.get(exName)!.sets.push({
-              weight: Number(s.weight),
-              reps: Number(s.reps),
-              setNumber: Number(s.set_number),
-            });
-          }
-
-          enriched.push({
-            id: w.id,
-            start_time: w.start_time,
-            end_time: w.end_time,
-            exerciseCount: uniqueExercises.size,
-            totalSets: (sets || []).length,
-            totalVolume,
-            exercises: Array.from(exerciseMap.values()),
-          });
-        }
+        const enriched = await enrichWorkouts(workouts);
         setRecentWorkouts(enriched);
         await cacheData('home_dashboard_data', {
           recentWorkouts: enriched,
@@ -287,6 +316,55 @@ export default function HomeScreen() {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const fetchAllWorkouts = async () => {
+    setIsLoadingAll(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: workouts, error } = await supabase
+        .from('workouts')
+        .select('*')
+        .eq('user_id', user.id)
+        .not('end_time', 'is', null)
+        .order('start_time', { ascending: false });
+
+      if (error) throw error;
+      if (workouts) {
+        const enriched = await enrichWorkouts(workouts);
+        setAllWorkouts(enriched);
+        setShowingAllWorkouts(true);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'Failed to load all workouts.');
+    } finally {
+      setIsLoadingAll(false);
+    }
+  };
+
+  const handleViewAllWorkouts = async () => {
+    if (allWorkouts.length > 0) {
+      setShowingAllWorkouts(true);
+      return;
+    }
+    await fetchAllWorkouts();
+  };
+
+  const displayedWorkouts = useMemo(() => {
+    if (!showingAllWorkouts) {
+      return recentWorkouts;
+    }
+    if (!workoutSearchQuery.trim()) {
+      return allWorkouts;
+    }
+    const q = workoutSearchQuery.toLowerCase().trim();
+    return allWorkouts.filter(w => {
+      const dateStr = formatDate(w.start_time).toLowerCase();
+      if (dateStr.includes(q)) return true;
+      return w.exercises.some(ex => ex.name.toLowerCase().includes(q));
+    });
+  }, [showingAllWorkouts, recentWorkouts, allWorkouts, workoutSearchQuery]);
+
   const handleDeleteWorkout = (workoutId: string) => {
     Alert.alert(
       "Delete Workout",
@@ -301,6 +379,8 @@ export default function HomeScreen() {
               const { error } = await supabase.from('workouts').delete().eq('id', workoutId);
               if (error) throw error;
               setRecentWorkouts(prev => prev.filter(w => w.id !== workoutId));
+              setAllWorkouts(prev => prev.filter(w => w.id !== workoutId));
+              setTotalWorkoutsCount(prev => Math.max(0, prev - 1));
             } catch (error: any) {
               Alert.alert("Error", error.message || "Failed to delete workout.");
             }
@@ -426,26 +506,87 @@ export default function HomeScreen() {
         </View>
       </Pressable>
 
-      {/* Recent Workouts */}
+      {/* Recent / All Workouts */}
       <View style={styles.recentSection}>
-        <Text style={styles.sectionTitle}>Recent Workouts</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>
+            {showingAllWorkouts
+              ? `All Workouts (${displayedWorkouts.length})`
+              : 'Recent Workouts'}
+          </Text>
+          {showingAllWorkouts && (
+            <Pressable
+              onPress={() => setShowingAllWorkouts(false)}
+              style={({ pressed }) => pressed ? [styles.toggleWorkoutsHeaderBtn, { opacity: 0.7 }] : styles.toggleWorkoutsHeaderBtn}
+            >
+              <Text style={styles.toggleWorkoutsHeaderBtnText}>Show Recent (5)</Text>
+            </Pressable>
+          )}
+        </View>
+
+        {showingAllWorkouts && allWorkouts.length > 3 && (
+          <TextInput
+            style={styles.searchWorkoutInput}
+            placeholder="Search by exercise or date..."
+            placeholderTextColor="#666666"
+            value={workoutSearchQuery}
+            onChangeText={setWorkoutSearchQuery}
+            clearButtonMode="while-editing"
+          />
+        )}
+
         {isLoading ? (
           <ActivityIndicator color="#39FF14" style={{ marginTop: 20 }} />
-        ) : recentWorkouts.length === 0 ? (
+        ) : displayedWorkouts.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateEmoji}>🏋️</Text>
             <Text style={styles.emptyStateText}>
-              No workouts yet.{'\n'}Tap 'Add a Workout' above to begin!
+              {showingAllWorkouts && workoutSearchQuery
+                ? `No workouts found matching "${workoutSearchQuery}".`
+                : "No workouts yet.\nTap 'Log a Workout' above to begin!"}
             </Text>
           </View>
         ) : (
           <View style={{ gap: 12 }}>
-            {recentWorkouts.map(item => (
+            {displayedWorkouts.map(item => (
               <View key={item.id}>
                 {renderWorkoutItem({ item })}
               </View>
             ))}
           </View>
+        )}
+
+        {/* View All Previous Workouts Button */}
+        {totalWorkoutsCount > 5 && !showingAllWorkouts && (
+          <Pressable
+            style={({ pressed }) => pressed ? [styles.viewAllBtn, styles.viewAllBtnPressed] : styles.viewAllBtn}
+            onPress={handleViewAllWorkouts}
+            disabled={isLoadingAll}
+          >
+            {isLoadingAll ? (
+              <ActivityIndicator color="#39FF14" size="small" />
+            ) : (
+              <View style={styles.viewAllBtnContent}>
+                <Text style={styles.viewAllBtnText}>
+                  View All Previous Workouts ({totalWorkoutsCount})
+                </Text>
+                <Text style={styles.viewAllBtnArrow}>▾</Text>
+              </View>
+            )}
+          </Pressable>
+        )}
+
+        {/* Collapse Back Button when showing all */}
+        {showingAllWorkouts && (
+          <Pressable
+            style={({ pressed }) => pressed ? [styles.viewAllBtn, styles.viewAllBtnPressed] : styles.viewAllBtn}
+            onPress={() => setShowingAllWorkouts(false)}
+          >
+            <View style={styles.viewAllBtnContent}>
+              <Text style={styles.viewAllBtnText}>Show Recent Only (5)</Text>
+              <Text style={styles.viewAllBtnArrow}>▴</Text>
+            </View>
+          </Pressable>
         )}
       </View>
 
@@ -573,11 +714,73 @@ const styles = StyleSheet.create({
   recentSection: {
     flex: 1,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  toggleWorkoutsHeaderBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+  toggleWorkoutsHeaderBtnText: {
+    color: '#39FF14',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  searchWorkoutInput: {
+    backgroundColor: '#141414',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: '#FFFFFF',
+    fontSize: 14,
+    marginBottom: 14,
+  },
+  viewAllBtn: {
+    backgroundColor: '#141414',
+    borderWidth: 1.5,
+    borderColor: '#39FF14',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  viewAllBtnPressed: {
+    backgroundColor: '#1A2E1A',
+    opacity: 0.85,
+  },
+  viewAllBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  viewAllBtnText: {
+    color: '#39FF14',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  viewAllBtnArrow: {
+    color: '#39FF14',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
-    marginBottom: 16,
+    marginBottom: 0,
   },
   workoutCard: {
     backgroundColor: '#1A1A1A',
